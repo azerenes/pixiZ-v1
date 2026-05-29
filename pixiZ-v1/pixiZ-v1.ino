@@ -21,6 +21,7 @@
 #include <esp_now.h>
 #include <NimBLEDevice.h>
 #include <qrcode.h>
+#include <esp_task_wdt.h>
 
 // ═══════════════════════════════════════════════════
 //  KONFIGURASYON
@@ -1546,8 +1547,6 @@ void splash() {
   tft.setTextColor(ST77XX_GREY);
   tft.setCursor(12, 100); tft.print("ESP32 DevKit V4");
 }
-
-#include <esp_task_wdt.h>
 
 void setup() {
   Serial.begin(115200);
