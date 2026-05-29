@@ -1,5 +1,5 @@
 /*
- * pixiZ v4 — Universal Multi-Tool Remote
+ * pixiZ v5 — Universal Multi-Tool Remote
  * PolyCast5 + Flipper Zero + Bruce + Marauder hybrid
  * ESP32 DevKit V4
  * github.com/azerenes/pixiZ-v1
@@ -13,9 +13,11 @@
 #include <Preferences.h>
 #include <HijelHID_BLEKeyboard.h>
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <esp_wifi.h>
 #include <esp_wifi_types.h>
 #include <NimBLEDevice.h>
+#include <qrcode.h>
 
 // ═══════════════════════════════════════════════════
 //  KONFIGURASYON
@@ -39,7 +41,7 @@
 #define ENABLE_BADUSB   1
 #define ENABLE_TVBGONE  1
 #define ENABLE_ESPNOW   0
-#define ENABLE_PASS     0
+#define ENABLE_PASS     1
 #define ENABLE_OTA      0
 #define ENABLE_NFC      0
 #define ENABLE_SUBGHZ   0
@@ -113,6 +115,25 @@ int beaconCount = 0, deauthCount = 0, pmkidCount = 0, probeCount = 0;
 char deauthTarget[18] = "FF:FF:FF:FF:FF:FF";
 char evilSSID[33] = "FreeWiFi";
 uint8_t deauthMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+bool evilTwinActive = false;
+int evilScanList = 0;
+char evilScanAPs[20][33];
+char evilScanBSSID[20][18];
+int evilScanRSSI[20];
+int evilScanCh[20];
+int evilScanEnc[20];
+char evilTargetSSID[33] = "";
+char evilTargetBSSID[18] = "";
+
+bool portScanRunning = false;
+int portScanTarget[4];
+int portScanPorts[] = {21,22,23,25,53,80,110,143,443,445,993,995,8080,8443,3306,3389,5900,6379,27017};
+int portScanOpen[19];
+int portScanOpenN = 0;
+int portScanIdx = 0;
+unsigned long portScanTimer = 0;
+
+char qrText[128] = "";
 
 // --- BLE spam ---
 bool bleSpamRunning = false;
@@ -553,6 +574,249 @@ void badUsbRun(const char* script) {
 #endif
 
 // ═══════════════════════════════════════════════════
+//  PASSWORD MANAGER
+// ═══════════════════════════════════════════════════
+
+#if ENABLE_PASS
+void ldPass() {
+  passN = prefs.getInt("pc", 0);
+  if (passN > MAX_PASS) passN = MAX_PASS;
+  for (int i = 0; i < passN; i++) {
+    char k[20];
+    sprintf(k, "ps%d", i); String n = prefs.getString(k, "");
+    strncpy(passes[i].svc, n.c_str(), MAX_NAME-1); passes[i].svc[MAX_NAME-1]=0;
+    sprintf(k, "pu%d", i); String u = prefs.getString(k, "");
+    strncpy(passes[i].user, u.c_str(), MAX_NAME-1); passes[i].user[MAX_NAME-1]=0;
+    sprintf(k, "pp%d", i); String p = prefs.getString(k, "");
+    strncpy(passes[i].pass, p.c_str(), MAX_PLEN-1); passes[i].pass[MAX_PLEN-1]=0;
+  }
+}
+void svPass() {
+  prefs.putInt("pc", passN);
+  for (int i = 0; i < passN; i++) {
+    char k[20];
+    sprintf(k, "ps%d", i); prefs.putString(k, passes[i].svc);
+    sprintf(k, "pu%d", i); prefs.putString(k, passes[i].user);
+    sprintf(k, "pp%d", i); prefs.putString(k, passes[i].pass);
+  }
+}
+#endif
+
+// ═══════════════════════════════════════════════════
+//  QR CODE GENERATOR
+// ═══════════════════════════════════════════════════
+
+void drawQR(const char* text) {
+  pg = 35; hdr("QR KOD", ST77XX_CYAN);
+  if (!text || strlen(text) == 0) {
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 50);
+    tft.print("QR metni bos."); ftr("MENU=Geri"); return;
+  }
+  QRCode qrc;
+  uint8_t qd[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrc, qd, 3, 0, text);
+  int sz = qrc.size;
+  int bs = (sz > 25) ? 2 : 3;
+  int offx = (160 - sz*bs) / 2;
+  int offy = (128 - sz*bs) / 2;
+  if (offy < 22) { offy = 22; bs = (128-22)/sz; offx = (160 - sz*bs)/2; }
+  for (int r = 0; r < sz; r++) {
+    for (int c = 0; c < sz; c++) {
+      tft.fillRect(offx + c*bs, offy + r*bs, bs, bs,
+                   qrcode_getModule(&qrc, r, c) ? ST77XX_WHITE : ST77XX_BLACK);
+    }
+  }
+  ftr("MENU=Geri");
+}
+
+// ═══════════════════════════════════════════════════
+//  EVIL TWIN (AP CLONE + DEAUTH)
+// ═══════════════════════════════════════════════════
+
+void drawEvilScan() {
+  pg = 19; hdr("EVIL TWIN", ST77XX_RED);
+  tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 24); tft.print("WiFi aglari taniyor...");
+  ftr("MENU=Iptal");
+  WiFi.mode(WIFI_STA); WiFi.disconnect(); delay(100);
+  int n = WiFi.scanNetworks();
+  if (n > 20) n = 20;
+  evilScanList = n;
+  for (int i = 0; i < n; i++) {
+    strncpy(evilScanAPs[i], WiFi.SSID(i).c_str(), 32); evilScanAPs[i][32]=0;
+    strncpy(evilScanBSSID[i], WiFi.BSSIDstr(i).c_str(), 17); evilScanBSSID[i][17]=0;
+    evilScanRSSI[i] = WiFi.RSSI(i);
+    evilScanCh[i] = WiFi.channel(i);
+    evilScanEnc[i] = WiFi.encryptionType(i);
+  }
+  WiFi.scanDelete();
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("EVIL TWIN", ST77XX_RED);
+  if (evilScanList == 0) {
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 50); tft.print("Ag bulunamadi.");
+    ftr("MENU=Geri"); return;
+  }
+  for (int i = 0; i < evilScanList && i < 5; i++) {
+    int y = 24+i*19; bool s = i==sel2;
+    tft.fillRect(2, y, 156, 17, s ? ST77XX_RED : ST77XX_BLACK);
+    if (s) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_RED);
+    tft.setTextColor(s ? ST77XX_BLACK : ST77XX_WHITE);
+    tft.setCursor(6, y+4); tft.print(evilScanAPs[i]);
+    tft.setTextColor(ST77XX_GREY);
+    tft.setCursor(126, y+4); tft.printf("%d", evilScanRSSI[i]);
+  }
+  ftr("OK=Sec  UP/DOWN=Gez  MENU=Geri");
+}
+
+void drawEvilRunning() {
+  pg = 20; hdr("EVIL TWIN", ST77XX_RED);
+  tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 30); tft.print("Hedef: ");
+  tft.setTextColor(ST77XX_WHITE); tft.print(evilTargetSSID);
+  tft.setCursor(8, 48); tft.setTextColor(ST77XX_CYAN); tft.print("BSSID: ");
+  tft.setTextColor(ST77XX_WHITE); tft.print(evilTargetBSSID);
+  tft.setTextColor(evilTwinActive ? ST77XX_GREEN : ST77XX_YELLOW);
+  tft.setCursor(8, 70); tft.print(evilTwinActive ? "SALDIRI AKTIF" : "DURDU");
+  tft.setCursor(8, 88); tft.setTextColor(ST77XX_GREY);
+  tft.print("Cloned AP + deauth calisiyor.");
+  ftr("OK=Ac/Kapat  MENU=Cikis");
+}
+
+void startEvilTwin() {
+  if (strlen(evilTargetSSID) == 0) return;
+  WiFi.mode(WIFI_MODE_NULL); delay(100);
+  WiFi.softAP(evilTargetSSID, NULL, evilScanCh[sel2], 0, 1);
+  delay(500);
+  WiFi.mode(WIFI_AP);
+  esp_wifi_set_promiscuous(true);
+  evilTwinActive = true;
+}
+
+void stopEvilTwin() {
+  esp_wifi_set_promiscuous(false);
+  WiFi.softAPdisconnect(true);
+  evilTwinActive = false;
+}
+
+void actEvilTwin() {
+  if (pg == 19) {
+    if (menu()) { pg=12; drawHackMenu(); }
+    else if (ok() && evilScanList > 0) {
+      strcpy(evilTargetSSID, evilScanAPs[sel2]);
+      strcpy(evilTargetBSSID, evilScanBSSID[sel2]);
+      drawEvilRunning();
+    }
+    else if (up()) { if (sel2>0) sel2--; drawEvilScan(); }
+    else if (down()) { if (sel2<evilScanList-1) sel2++; drawEvilScan(); }
+  } else if (pg == 20) {
+    if (menu()) { stopEvilTwin(); pg=12; drawHackMenu(); }
+    else if (ok()) {
+      if (!evilTwinActive) startEvilTwin();
+      else stopEvilTwin();
+      drawEvilRunning();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  PORT SCANNER
+// ═══════════════════════════════════════════════════
+
+void drawPortScan() {
+  pg = 21; hdr("PORT TARAMA", ST77XX_RED);
+  if (portScanRunning) {
+    tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 30);
+    tft.printf("Taniyor: %d", portScanPorts[portScanIdx]);
+    tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
+    tft.printf("Acik: %d", portScanOpenN);
+    ftr("MENU=Durdur"); return;
+  }
+  tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 30);
+  tft.print("Hedef: ");
+  tft.setTextColor(ST77XX_WHITE);
+  tft.printf("%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
+  tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
+  tft.printf("Acik port: %d", portScanOpenN);
+  int y = 68;
+  for (int i = 0; i < portScanOpenN && i < 3; i++) {
+    tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, y);
+    tft.printf("Port %d", portScanOpen[i]); y += 14;
+  }
+  if (portScanOpenN > 3) {
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, y);
+    tft.printf("+%d daha", portScanOpenN-3);
+  }
+  ftr("OK=Baslat  MENU=Geri");
+}
+
+void doPortScan() {
+  portScanRunning = true;
+  portScanIdx = 0;
+  portScanOpenN = 0;
+  int nPorts = sizeof(portScanPorts)/sizeof(portScanPorts[0]);
+
+  for (int i = 0; i < nPorts && portScanRunning; i++) {
+    portScanIdx = i;
+    WiFiClient c;
+    char host[16];
+    sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
+    if (c.connect(host, portScanPorts[i])) {
+      portScanOpen[portScanOpenN++] = portScanPorts[i];
+      c.stop();
+    }
+    // Update display every 5 ports
+    if (i % 5 == 0 && pg == 21) {
+      tft.fillRect(0, 24, 160, 30, ST77XX_BLACK);
+      tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 30);
+      tft.printf("Taniyor: %d/%d", i+1, nPorts);
+      tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
+      tft.printf("Acik: %d", portScanOpenN);
+    }
+  }
+  portScanRunning = false;
+  if (pg == 21) drawPortScan();
+}
+
+// ═══════════════════════════════════════════════════
+//  ENHANCED WIFI SCANNER (BEACON SNIFF)
+// ═══════════════════════════════════════════════════
+
+void drawBeaconSniff() {
+  pg = 36; hdr("BEACON SNIFF", ST77XX_CYAN);
+  tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 24);
+  tft.print("WiFi aglari taniyor...");
+  ftr("MENU=Iptal");
+  WiFi.mode(WIFI_STA); WiFi.disconnect(); delay(100);
+  int n = WiFi.scanNetworks();
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("BEACON SNIFF", ST77XX_CYAN);
+  if (n == 0) {
+    tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 50);
+    tft.print("Ag bulunamadi."); ftr("MENU=Geri"); return;
+  }
+  if (n > 5) n = 5;
+  for (int i = 0; i < n; i++) {
+    int y = 24+i*19;
+    String enc;
+    switch (WiFi.encryptionType(i)) {
+      case 2: enc="WPA"; break; case 4: enc="WPA2"; break;
+      case 5: enc="WEP"; break; case 7: enc="WPA3"; break;
+      case 8: enc="OWE"; break; default: enc="Acik";
+    }
+    tft.setTextColor(ST77XX_WHITE);
+    tft.setCursor(4, y+2); tft.print(WiFi.SSID(i).substring(0,12));
+    tft.setCursor(96, y+2); tft.setTextColor(ST77XX_GREEN);
+    tft.printf("%d%%", constrain(100+WiFi.RSSI(i)*2,0,100));
+    tft.setCursor(132, y+2); tft.setTextColor(ST77XX_GREY);
+    tft.print(enc);
+    tft.setTextColor(ST77XX_GREY);
+    tft.setCursor(4, y+10); tft.print(WiFi.BSSIDstr(i).substring(0,8));
+    tft.print(" Ch");
+    tft.print(WiFi.channel(i));
+  }
+  WiFi.scanDelete();
+  ftr("MENU=Geri");
+}
+
+// ═══════════════════════════════════════════════════
 //  SPLASH + SETUP
 // ═══════════════════════════════════════════════════
 
@@ -563,7 +827,7 @@ void splash() {
   tft.setCursor(32, 30); tft.print("pixiZ");
   tft.setTextSize(1); tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(28, 56); tft.print("Multi-Tool");
-  tft.setCursor(24, 72); tft.print("Remote v4");
+  tft.setCursor(24, 72); tft.print("Remote v5");
   tft.setTextColor(ST77XX_GREY);
   tft.setCursor(12, 100); tft.print("ESP32 DevKit V4");
 }
@@ -595,6 +859,12 @@ void setup() {
 
   splash(); delay(1500);
   pg = 0; sel = 0;
+  // Default port scan target to gateway
+  WiFi.mode(WIFI_STA); WiFi.disconnect(); delay(100);
+  IPAddress gw = WiFi.gatewayIP();
+  if (gw) { portScanTarget[0]=gw[0]; portScanTarget[1]=gw[1]; portScanTarget[2]=gw[2]; portScanTarget[3]=gw[3]; }
+  else { portScanTarget[0]=192; portScanTarget[1]=168; portScanTarget[2]=1; portScanTarget[3]=1; }
+  WiFi.mode(WIFI_OFF);
   drawMain();
 }
 
@@ -629,7 +899,7 @@ const char* mn[] = {
 const int MNC = sizeof(mn)/sizeof(mn[0]);
 
 void drawMain() {
-  pg = 0; hdr("pixiZ v4", ST77XX_BLUE);
+  pg = 0; hdr("pixiZ v5", ST77XX_BLUE);
   for (int i = 0; i < MNC; i++) mi(i, MNC, 28, 28, ST77XX_CYAN, sel, mn[i]);
   ftr("UP/DOWN  OK=Sel  MENU=Tools");
 }
@@ -649,7 +919,7 @@ void mainOk() {
 #if ENABLE_BLESPAM || ENABLE_BLESCAN
   if (sel==++i) { sel2=0; pg=22; drawBLEMenu(); return; }
 #endif
-  if (sel==++i) { pg=6; drawWiFi(); return; }
+  if (sel==++i) { wifiSel=0; pg=6; drawWiFi(); return; }
 #if ENABLE_BADUSB
   if (sel==++i) { sel2=0; pg=33; drawBadUSBMenu(); return; }
 #endif
@@ -657,7 +927,7 @@ void mainOk() {
   if (sel==++i) { pg=7; drawESPNOW(); return; }
 #endif
 #if ENABLE_PASS
-  if (sel==++i) { pg=8; drawPassList(); return; }
+  if (sel==++i) { sel2=0; pg=8; drawPassList(); return; }
 #endif
   if (sel==++i) { sel3=0; pg=10; drawTools(); }
 }
@@ -911,15 +1181,16 @@ void drawWiFi() {
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(8, 30); tft.print("[1] Ag Tara");
   tft.setCursor(8, 50); tft.print("[2] Ag Bilgisi");
-  tft.setCursor(8, 70); tft.print("[3] Paket Monit");
+  tft.setCursor(8, 70); tft.print("[3] QR Kod Olustur");
+  tft.setCursor(8, 90); tft.print("[4] Paket Monit");
   tft.setTextColor(ST77XX_GREY);
-  tft.setCursor(8, 96); tft.print("WiFi: ");
+  tft.setCursor(8, 110); tft.print("WiFi: ");
   if (WiFi.status() == WL_CONNECTED) {
     tft.setTextColor(ST77XX_GREEN); tft.print("Bagli");
   } else {
     tft.setTextColor(ST77XX_RED); tft.print("Bagli Degil");
   }
-  ftr("MENU=Geri  OK=Scan");
+  ftr("MENU=Geri  OK=Sec");
 }
 void drawWiFiScan() {
   tft.fillScreen(ST77XX_BLACK);
@@ -957,9 +1228,52 @@ void doWiFiScan() {
   wifiScanning = false;
   drawWiFiScan();
 }
+int wifiSel = 0;
+
 void actWiFi() {
   if (menu()) { pg=0; drawMain(); }
-  else if (ok()) { doWiFiScan(); }
+  else if (ok()) {
+    switch (wifiSel) {
+      case 0: doWiFiScan(); break;
+      case 1: // Ag Bilgisi
+        tft.fillScreen(ST77XX_BLACK);
+        tft.fillRect(0,0,160,20,ST77XX_CYAN);
+        tft.drawFastHLine(0,20,160,0x3A9F);
+        tft.setTextSize(1); tft.setTextColor(ST77XX_WHITE);
+        tft.setCursor(20,5); tft.print("AG BILGISI");
+        tft.setTextColor(ST77XX_GREY); tft.setCursor(8,30);
+        tft.print("SSID: "); tft.setTextColor(ST77XX_WHITE);
+        tft.print(WiFi.SSID());
+        tft.setCursor(8,48); tft.setTextColor(ST77XX_GREY);
+        tft.print("IP: "); tft.setTextColor(ST77XX_WHITE);
+        tft.print(WiFi.localIP().toString());
+        tft.setCursor(8,66); tft.setTextColor(ST77XX_GREY);
+        tft.print("GW: "); tft.setTextColor(ST77XX_WHITE);
+        tft.print(WiFi.gatewayIP().toString());
+        tft.setCursor(8,84); tft.setTextColor(ST77XX_GREY);
+        tft.print("RSSI: "); tft.setTextColor(ST77XX_WHITE);
+        tft.printf("%d dBm", WiFi.RSSI());
+        tft.setCursor(8,102); tft.setTextColor(ST77XX_GREY);
+        tft.print("MAC: "); tft.setTextColor(ST77XX_WHITE);
+        tft.print(WiFi.macAddress());
+        ftr("MENU=Geri");
+        pg = 60; break;
+      case 2: // QR Kod
+        {
+          char qrBuf[128] = {0};
+          if (WiFi.status() == WL_CONNECTED) {
+            snprintf(qrBuf, 127, "WIFI:S:%s;T:WPA;P:%s;;", WiFi.SSID().c_str(), "");
+          } else {
+            snprintf(qrBuf, 127, "pixiZ v4 Multi-Tool");
+          }
+          strcpy(qrText, qrBuf);
+          drawQR(qrText);
+        }
+        break;
+    }
+  }
+  else if (up()) { wifiSel = (wifiSel+3)%4; drawWiFi(); }
+  else if (down()) { wifiSel = (wifiSel+1)%4; drawWiFi(); }
 }
 
 // ═══════════════════════════════════════════════════
@@ -973,9 +1287,9 @@ const char* hkm[] = {
   "Deauth Detector",
   "PMKID Capture",
   "Probe Sniffer",
-  "AP Clone Spam",
   "Evil Twin",
-  "ARP Spoofing"
+  "Beacon Sniff",
+  "Port Scanner"
 };
 const int HKC = sizeof(hkm)/sizeof(hkm[0]);
 
@@ -1004,12 +1318,13 @@ void drawHackMenu() {
       case 2: act = deauthDetect; break;
       case 3: act = pmkidRunning; break;
       case 4: act = probeSniff; break;
+      case 5: act = evilTwinActive; break;
     }
     if (act) {
       tft.setTextColor(ST77XX_GREEN); tft.setCursor(136, y+3); tft.print("ON");
     }
   }
-  ftr("OK=Ac/Kapat  MENU=Geri");
+  ftr("OK=Sec  MENU=Geri");
 }
 
 void drawBeaconScreen() {
@@ -1183,6 +1498,9 @@ void actHackMenu() {
   if (menu()) { stopPromiscuous(); pg=0; drawMain(); }
   else if (ok()) {
     if (sel2 < 5) toggleHack(sel2);
+    else if (sel2 == 5) { sel2=0; drawEvilScan(); }
+    else if (sel2 == 6) { drawBeaconSniff(); }
+    else if (sel2 == 7) { drawPortScan(); }
   }
   else if (up()) { int o=sel2; if (sel2>0) sel2--; drawHackMenu(); }
   else if (down()) { int o=sel2; if (sel2<HKC-1) sel2++; drawHackMenu(); }
@@ -1377,7 +1695,7 @@ void actESPNOW() { if (menu()) { pg=0; drawMain(); } }
 #endif
 
 // ═══════════════════════════════════════════════════
-//  PASSWORD (hazir)
+//  PASSWORD MANAGER
 // ═══════════════════════════════════════════════════
 
 #if ENABLE_PASS
@@ -1386,39 +1704,161 @@ void drawPassList() {
   if (passN == 0) {
     tft.setTextColor(ST77XX_GREY);
     tft.setCursor(8, 50); tft.print("Kayitli sifre yok.");
-    ftr("MENU=Geri"); return;
+    tft.setCursor(8, 66); tft.print("UP=Yeni ekle");
+    ftr("OK=Gor  MENU=Geri"); return;
   }
-  for (int i = 0; i < passN && i < 5; i++) {
+  // Show up to 5 with "+ Ekle" button
+  int disp = passN + 1;
+  int maxDisp = disp > 5 ? 5 : disp;
+  for (int i = 0; i < maxDisp; i++) {
     int y = 24+i*19; bool s = i==sel2;
     tft.fillRect(2, y, 156, 17, s ? ST77XX_CYAN : ST77XX_BLACK);
     if (s) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_CYAN);
     tft.setTextColor(s ? ST77XX_BLACK : ST77XX_WHITE);
-    tft.setCursor(8, y+4); tft.print(passes[i].svc);
+    if (i < passN) {
+      tft.setCursor(8, y+4); tft.print(passes[i].svc);
+    } else {
+      tft.setTextColor(s ? ST77XX_BLACK : ST77XX_GREEN);
+      tft.setCursor(8, y+4); tft.print("+ Yeni Ekle");
+    }
   }
-  ftr("OK=Gor  MENU=Geri");
+  ftr("OK=Gor  UP=Yeni  MENU=Geri");
 }
+
+void drawPassDetail() {
+  hdr(passes[sel2].svc, ST77XX_CYAN);
+  tft.setTextColor(ST77XX_GREY);
+  tft.setCursor(8, 30); tft.print("Kullanici: ");
+  tft.setTextColor(ST77XX_WHITE);
+  tft.print(passes[sel2].user);
+  tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREY);
+  tft.print("Sifre: ");
+  tft.setTextColor(ST77XX_WHITE);
+  tft.print(passes[sel2].pass);
+  tft.setCursor(8, 70); tft.setTextColor(ST77XX_GREEN);
+  tft.print("OK=BT Gonder  DOWN=Sil");
+  tft.setCursor(8, 86); tft.setTextColor(ST77XX_YELLOW);
+  tft.print("MENU=Geri");
+  pg = 9;
+}
+
+void passTypeBT(int idx) {
+#if ENABLE_BT
+  if (!bleKeyboard.isConnected()) {
+    tft.fillRect(0, 68, 160, 20, ST77XX_BLACK);
+    tft.setTextColor(ST77XX_RED); tft.setCursor(8, 70);
+    tft.print("BT bagli degil!"); delay(1000); drawPassDetail(); return;
+  }
+  // Type username
+  if (strlen(passes[idx].user) > 0) {
+    bleKeyboard.print(passes[idx].user); delay(100);
+    bleKeyboard.write(KEY_TAB); delay(200);
+  }
+  // Type password
+  bleKeyboard.print(passes[idx].pass); delay(100);
+  bleKeyboard.write(KEY_RETURN);
+  tft.fillRect(0, 68, 160, 20, ST77XX_BLACK);
+  tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 70);
+  tft.print("Gonderildi!"); delay(800);
+  drawPassDetail();
+#else
+  tft.fillRect(0, 68, 160, 20, ST77XX_BLACK);
+  tft.setTextColor(ST77XX_RED); tft.setCursor(8, 70);
+  tft.print("BT kapali!"); delay(800); drawPassDetail();
+#endif
+}
+
+void passDelete(int idx) {
+  for (int i = idx; i < passN-1; i++) passes[i] = passes[i+1];
+  passN--;
+  svPass();
+  if (sel2 >= passN && passN > 0) sel2 = passN-1;
+  drawPassList();
+}
+
+int passField = 0; // 0=servis 1=kullanici 2=sifre
+int passCharIdx = 0;
+char passChars[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:',.<>?/~`";
+const int passCharN = sizeof(passChars)-1;
+
+void drawPassAdd() {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.fillRect(0, 0, 160, 20, ST77XX_CYAN);
+  tft.drawFastHLine(0, 20, 160, 0x3A9F);
+  tft.setTextSize(1); tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(32, 5); tft.print("SIFRE EKLE");
+  // Field indicator
+  tft.setTextColor(ST77XX_GREY);
+  tft.setCursor(2, 22); tft.print(passField == 0 ? ">" : " ");
+  tft.setCursor(2, 42); tft.print(passField == 1 ? ">" : " ");
+  tft.setCursor(2, 62); tft.print(passField == 2 ? ">" : " ");
+  // Field values
+  tft.setTextColor(ST77XX_GREY); tft.setCursor(10, 22); tft.print("Servis:");
+  tft.setTextColor(ST77XX_WHITE); tft.setCursor(10, 30);
+  tft.print(passes[passN].svc);
+  tft.setTextColor(ST77XX_GREY); tft.setCursor(10, 42); tft.print("Kullanici:");
+  tft.setTextColor(ST77XX_WHITE); tft.setCursor(10, 50);
+  tft.print(passes[passN].user);
+  tft.setTextColor(ST77XX_GREY); tft.setCursor(10, 62); tft.print("Sifre:");
+  tft.setTextColor(ST77XX_WHITE); tft.setCursor(10, 70);
+  tft.print(passes[passN].pass);
+  // Current char
+  char* f = passField == 0 ? passes[passN].svc : (passField == 1 ? passes[passN].user : passes[passN].pass);
+  int fl = strlen(f);
+  tft.fillRect(10+fl*6, 22+passField*20, 6, 8, ST77XX_YELLOW);
+  tft.setTextColor(ST77XX_BLACK);
+  tft.setCursor(10+fl*6, 22+passField*20); tft.print(f[fl] ? f[fl] : ' ');
+  ftr("UP=Harf  DOWN=Secim  OK=Ilk");
+}
+
 void actPass() {
   if (pg == 8) {
     if (menu()) { pg=0; drawMain(); }
-    else if (ok() && passN > 0) {
-      hdr(passes[sel2].svc, ST77XX_CYAN);
-      tft.setTextColor(ST77XX_GREY);
-      tft.setCursor(8, 30); tft.print("Kullanici: ");
-      tft.setTextColor(ST77XX_WHITE);
-      tft.print(passes[sel2].user);
-      tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREY);
-      tft.print("Sifre: ");
-      tft.setTextColor(ST77XX_WHITE);
-      tft.print(passes[sel2].pass);
-      tft.setCursor(8, 70); tft.setTextColor(ST77XX_GREEN);
-      tft.print("(BT ile gonderme ileride)");
-      ftr("MENU=Geri");
-      pg = 9;
+    else if (up()) {
+      if (passN < MAX_PASS && passN < MAX_PASS) {
+        memset(&passes[passN], 0, sizeof(PEntry));
+        passField = 0; passCharIdx = 0;
+        drawPassAdd(); pg = 50;
+      } else {
+        tft.fillRect(0, 100, 160, 12, ST77XX_BLACK);
+        tft.setTextColor(ST77XX_RED); tft.setCursor(8, 104); tft.print("DOLU!"); delay(500);
+      }
     }
-    else if (up() && passN > 0) { sel2=(sel2-1+passN)%passN; drawPassList(); }
-    else if (down() && passN > 0) { sel2=(sel2+1)%passN; drawPassList(); }
+    else if (ok()) { if (sel2 < passN) drawPassDetail(); }
+    else if (down()) {
+      if (sel2 < passN) { sel2 = (sel2+1) % (passN+1); drawPassList(); }
+    }
   } else if (pg == 9) {
     if (menu()) { pg=8; drawPassList(); }
+    else if (ok()) { passTypeBT(sel2); }
+    else if (down()) { passDelete(sel2); }
+  } else if (pg == 50) {
+    if (menu()) { // Save & exit
+      if (strlen(passes[passN].svc) > 0) {
+        passN++; svPass(); sel2 = passN-1; pg=8; drawPassList();
+      } else { pg=8; drawPassList(); }
+    }
+    else if (ok()) { // Next field
+      passField = (passField + 1) % 3;
+      passCharIdx = 0;
+      drawPassAdd();
+    }
+    else if (up()) { // Cycle character forward
+      char* f = passField == 0 ? passes[passN].svc : (passField == 1 ? passes[passN].user : passes[passN].pass);
+      int fl = strlen(f);
+      if (fl < MAX_NAME-1) {
+        passCharIdx = (passCharIdx + 1) % passCharN;
+        f[fl] = passChars[passCharIdx];
+        f[fl+1] = 0;
+      }
+      drawPassAdd();
+    }
+    else if (down()) { // Cycle character backward
+      char* f = passField == 0 ? passes[passN].svc : (passField == 1 ? passes[passN].user : passes[passN].pass);
+      int fl = strlen(f);
+      if (fl > 0) { f[fl-1] = 0; passCharIdx = 0; }
+      drawPassAdd();
+    }
   }
 }
 #endif
@@ -1440,11 +1880,11 @@ void toolsDown() { int o=sel3; sel3=(sel3+1)%TLC; mi(o,TLC,28,28,ST77XX_CYAN,sel
 void toolsOk() {
   switch (sel3) {
     case 0:
-      hdr("pixiZ v4", ST77XX_BLUE);
+      hdr("pixiZ v5", ST77XX_BLUE);
       tft.setTextColor(ST77XX_CYAN); tft.setCursor(8, 30); tft.print("pixiZ Multi-Tool");
-      tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 46); tft.print("Surum 4.0");
+      tft.setTextColor(ST77XX_WHITE); tft.setCursor(8, 46); tft.print("Surum 5.0");
       tft.setCursor(8, 62); tft.print("Bruce + Marauder +");
-      tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 82); tft.print("IR + BT + WiFi + BLE");
+      tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 82); tft.print("IR+BT+WiFi+BLE+QR+Port");
       tft.setCursor(8, 98); tft.print("github.com/azerenes/pixiZ-v1");
       ftr("MENU=Geri"); pg = 11; break;
     case 1:
@@ -1493,6 +1933,14 @@ void loopHackBg() {
       tft.setCursor(8, 48); tft.setTextColor(ST77XX_WHITE);
       tft.printf("Gonderilen: %d", deauthCount);
     }
+  }
+
+  // Evil Twin deauth
+  if (evilTwinActive && now % 250 == 0) {
+    uint8_t mac[6];
+    sscanf(evilTargetBSSID, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+           &mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]);
+    sendDeauthFrame(deauthMac, mac);
   }
 
   // TV-B-Gone
@@ -1545,7 +1993,7 @@ void loop() {
       case 7: actESPNOW(); break;
 #endif
 #if ENABLE_PASS
-      case 8: case 9: actPass(); break;
+      case 8: case 9: case 50: actPass(); break;
 #endif
       case 10:
         if (up()) toolsUp();
@@ -1556,6 +2004,9 @@ void loop() {
       case 11:
         if (menu()) { pg=10; drawTools(); }
         break;
+      case 60:
+        if (menu()) { pg=6; drawWiFi(); }
+        break;
 #if ENABLE_HACK
       case 12: actHackMenu(); break;
       case 13: case 15: case 16: case 17: case 18:
@@ -1565,6 +2016,11 @@ void loop() {
           int attack = a[pg - 13];
           toggleHack(attack);
         }
+        break;
+      case 19: case 20: actEvilTwin(); break;
+      case 21:
+        if (menu()) { portScanRunning = false; pg=12; drawHackMenu(); }
+        else if (ok() && !portScanRunning) { doPortScan(); drawPortScan(); }
         break;
 #endif
 #if ENABLE_BLESPAM || ENABLE_BLESCAN
@@ -1590,6 +2046,12 @@ void loop() {
       case 30: actIRToolsMenu(); break;
       case 31: actTVBGone(); break;
       case 32: actIRRaw(); break;
+      case 35:
+        if (menu()) { pg=6; drawWiFi(); }
+        break;
+      case 36:
+        if (menu()) { pg=12; drawHackMenu(); }
+        break;
 #if ENABLE_BADUSB
       case 33: case 34: actBadUSB(); break;
 #endif
