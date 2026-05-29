@@ -105,13 +105,13 @@ unsigned long pldDelay = 0;
 #endif
 
 // --- Wi-Fi attacks ---
-bool beaconRunning = false;
-bool deauthRunning = false;
-bool deauthDetect = false;
-bool pmkidRunning = false;
-bool probeSniff = false;
-bool evilTwinRunning = false;
-bool apCloneRunning = false;
+volatile bool beaconRunning = false;
+volatile bool deauthRunning = false;
+volatile bool deauthDetect = false;
+volatile bool pmkidRunning = false;
+volatile bool probeSniff = false;
+volatile bool evilTwinRunning = false;
+volatile bool apCloneRunning = false;
 unsigned long beaconTimer = 0;
 unsigned long deauthTimer = 0;
 int beaconCount = 0, deauthCount = 0, pmkidCount = 0, probeCount = 0;
@@ -127,6 +127,7 @@ int evilScanCh[20];
 int evilScanEnc[20];
 char evilTargetSSID[33] = "";
 char evilTargetBSSID[18] = "";
+volatile bool deauthAlert = false;
 
 bool portScanRunning = false;
 int portScanTarget[4];
@@ -142,7 +143,7 @@ char qrText[128] = "";
 bool rawSniffRunning = false;
 struct RawPkt { char src[18], dst[18]; uint8_t type; unsigned long t; };
 RawPkt rawBuf[10];
-int rawBufIdx = 0;
+volatile int rawBufIdx = 0;
 
 // --- Evil Portal ---
 bool portalRunning = false;
@@ -184,6 +185,7 @@ bool bleScanRunning = false;
 // --- TV-B-Gone ---
 bool tvbgRunning = false;
 int tvbgIdx = 0;
+unsigned long tvbgTimer = 0;
 
 // --- IR RAW ---
 bool irRawMode = false;
@@ -260,7 +262,7 @@ void ldIR() {
     sprintf(k, "rb%d", r); rmt[r].bc = prefs.getInt(k, 0);
     if (rmt[r].bc > MAX_BTNS) rmt[r].bc = MAX_BTNS;
     for (int b = 0; b < rmt[r].bc; b++) {
-      sprintf(k, "r%dbn", r, b); String bn = prefs.getString(k, "Btn");
+      sprintf(k, "r%db%dn", r, b); String bn = prefs.getString(k, "Btn");
       strncpy(rmt[r].btns[b].name, bn.c_str(), MAX_BNAME-1); rmt[r].btns[b].name[MAX_BNAME-1]=0;
       sprintf(k, "r%db%da", r, b); rmt[r].btns[b].addr = prefs.getUShort(k, 0);
       sprintf(k, "r%db%dc", r, b); rmt[r].btns[b].cmd = prefs.getUShort(k, 0);
@@ -352,11 +354,7 @@ void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   // Deauth detector (type=0 stype=12)
   if (typef == 0 && stype == 12 && deauthDetect) {
     deauthCount++;
-    if (deauthCount <= 3) {
-      tft.fillRect(0, 28, 160, 16, ST77XX_BLACK);
-      tft.setTextColor(ST77XX_RED); tft.setCursor(4, 30);
-      tft.print("DEAUTH!");
-    }
+    if (deauthCount <= 3) deauthAlert = true;
   }
 
   // RAW Sniffer — store packet info
@@ -456,7 +454,6 @@ void sendDeauthFrame(uint8_t* targetMac, uint8_t* apMac) {
 
 void bleSpamStart(int type) {
   if (bleAdv) { bleAdv->stop(); }
-  NimBLEDevice::init("");
   bleAdv = NimBLEDevice::getAdvertising();
   bleAdv->stop();
 
@@ -538,9 +535,9 @@ const uint16_t tvbgCodes[] = {
 };
 
 void tvbgSend() {
-  for (int i = 0; i < 5; i++) { // 5 rounds
-    for (int j = 0; j < sizeof(tvbgCodes)/2; j++) {
-      IrSender.sendNEC(0x00, tvbgCodes[j], 0);
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < (int)(sizeof(tvbgCodes)/sizeof(tvbgCodes[0])); j++) {
+      sendIR(0x00, tvbgCodes[j], NEC);
       delay(5);
     }
   }
@@ -806,8 +803,8 @@ void doPortScan() {
     WiFiClient c;
     char host[16];
     sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
-    if (c.connect(host, portScanPorts[i])) {
-      portScanOpen[portScanOpenN++] = portScanPorts[i];
+    if (c.connect(host, portScanPorts[i], 1500)) {
+      if (portScanOpenN < 19) portScanOpen[portScanOpenN++] = portScanPorts[i];
       c.stop();
     }
     // Update display every 5 ports
@@ -986,7 +983,8 @@ void startEvilPortal(const char* ssid) {
 }
 
 void stopEvilPortal() {
-  if (portalServer) portalServer->close();
+  if (portalServer) { portalServer->stop(); delete portalServer; portalServer = NULL; }
+  if (dnsServer) { delete dnsServer; dnsServer = NULL; }
   if (dnsServer) dnsServer->stop();
   WiFi.softAPdisconnect(true);
   portalRunning = false;
@@ -1054,8 +1052,7 @@ void drawAirTagSniff() {
 void startAirTagSniff() {
   airtagRunning = true;
   airtagCount = 0;
-  NimBLEDevice::init("");
-  NimBLEScan* s = NimBLEDevice::getScan();
+  NimBLEDevice::getScan();
   s->setActiveScan(false);
   s->setInterval(100);
   s->setWindow(50);
@@ -1160,8 +1157,8 @@ void actESPNOW() {
     }
     else if (up()) {
       int l = strlen(espnowMsg);
-      if (l < 64) { espnowMsg[l] = 'A' + (esp_random()%26); espnowMsg[l+1]=0; }
-      if (l > 0) { espnowMsg[l] = 'a' + (esp_random()%26); espnowMsg[l+1]=0; }
+      if (l < 63) { espnowMsg[l] = 'A' + (esp_random()%26); espnowMsg[l+1]=0; }
+      else if (l == 63) { espnowMsg[l] = 'a' + (esp_random()%26); espnowMsg[l+1]=0; }
       drawESPNOWMsg();
     }
     else if (down() && strlen(espnowMsg) > 0) {
@@ -1278,6 +1275,7 @@ void setup() {
   initESPNOW();
 #endif
 
+  NimBLEDevice::init("pixiZ");
   splash(); delay(1500);
   pg = 0; sel = 0;
   // Default port scan target to gateway
@@ -1439,8 +1437,8 @@ void drawLearn() {
       case SAMSUNG: tft.print("SAMSUNG"); break;
       default: tft.print((int)irRes.protocol);
     }
-    tft.setCursor(8, 86); tft.print("Addr:0x"); tft.print(irRes.addr, HEX);
-    tft.setCursor(8, 100); tft.print("Cmd: 0x"); tft.print(irRes.cmd, HEX);
+    tft.setCursor(8, 86); tft.print("Addr:0x"); tft.print(irRes.address, HEX);
+    tft.setCursor(8, 100); tft.print("Cmd: 0x"); tft.print(irRes.command, HEX);
   }
   ftr("OK=Learn/Save  MENU=Cancel");
 }
@@ -1452,9 +1450,9 @@ void drawSend() {
   tft.setCursor(8, 56); tft.setTextColor(ST77XX_CYAN); tft.print("Button: ");
   tft.setTextColor(ST77XX_WHITE); tft.print(b->name);
   tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 78); tft.print("Sending IR...");
-  for (int i = 0; i < 3; i++) { IrSender.sendNEC(b->addr, b->cmd, 0); delay(50); }
+  for (int i = 0; i < 3; i++) { sendIR(b->addr, b->cmd, b->proto); delay(50); }
   tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 96); tft.print("Done!");
-  delay(600);
+  ftr("MENU=Back");
 }
 void irAdd() {
   if (rmtN >= MAX_REMOTES) return;
@@ -1497,8 +1495,8 @@ void irSave() {
   int b = rmt[r].bc;
   if (b >= MAX_BTNS) return;
   strcpy(rmt[r].btns[b].name, tName);
-  rmt[r].btns[b].addr = irRes.addr;
-  rmt[r].btns[b].cmd = irRes.cmd;
+  rmt[r].btns[b].addr = irRes.address;
+  rmt[r].btns[b].cmd = irRes.command;
   rmt[r].btns[b].proto = irRes.protocol;
   rmt[r].bc++; svIR(); sel3 = b; lrn = false;
   tft.fillRect(0, 50, 160, 30, ST77XX_BLACK);
@@ -1524,10 +1522,56 @@ void IRloop() {
       case SAMSUNG: tft.print("SAMSUNG"); break;
       default: tft.print((int)irRes.protocol);
     }
-    tft.setCursor(8, 72); tft.print("Addr:0x"); tft.print(irRes.addr, HEX);
-    tft.setCursor(8, 88); tft.print("Cmd: 0x"); tft.print(irRes.cmd, HEX);
+    tft.setCursor(8, 72); tft.print("Addr:0x"); tft.print(irRes.address, HEX);
+    tft.setCursor(8, 88); tft.print("Cmd: 0x"); tft.print(irRes.command, HEX);
   }
 }
+
+void sendIR(uint16_t addr, uint16_t cmd, uint8_t proto) {
+  switch ((decode_type_t)proto) {
+    case NEC: IrSender.sendNEC(addr, cmd, 0); break;
+    case SONY: IrSender.sendSony(addr, cmd, 12); break;
+    case RC5: IrSender.sendRC5(addr, cmd, 0); break;
+    case RC6: IrSender.sendRC6(addr, cmd, 0); break;
+    case SAMSUNG: IrSender.sendSamsung(addr, cmd, 0); break;
+    default: IrSender.sendNEC(addr, cmd, 0); break;
+  }
+}
+
+void actIR() {
+  if (pg == 1) {
+    if (rmtN == 0) {
+      if (ok()) irAdd();
+      else if (menu()) { pg=0; drawMain(); }
+      return;
+    }
+    if (up()) { int o=sel2; sel2=(sel2-1+rmtN)%rmtN; drawIRItem(o,0); drawIRItem(sel2,1); }
+    else if (down()) { int o=sel2; sel2=(sel2+1)%rmtN; drawIRItem(o,0); drawIRItem(sel2,1); }
+    else if (ok()) { sel3=0; drawBtnList(); }
+    else if (menu()) { pg=0; drawMain(); }
+    return;
+  }
+  if (pg == 2) {
+    int c = rmt[sel2].bc, t = c + (c < MAX_BTNS ? 1 : 0);
+    if (ok()) {
+      if (c == 0 || sel3 >= c) { irLearn(sel2); }
+      else drawSend();
+    } else if (up() && t > 0) { int o=sel3; sel3=(sel3-1+t)%t; drawBtnItem(o,0); drawBtnItem(sel3,1); }
+    else if (down() && t > 0) { int o=sel3; sel3=(sel3+1)%t; drawBtnItem(o,0); drawBtnItem(sel3,1); }
+    else if (menu()) { pg=1; drawIRList(); }
+    return;
+  }
+  if (pg == 3) {
+    if (ok()) { if (lrnSt == 0) drawLearn(); else irSave(); }
+    else if (menu()) { lrn=0; lrnSt=0; pg=2; drawBtnList(); }
+    return;
+  }
+  if (pg == 4) {
+    if (menu()) { pg=2; drawBtnList(); }
+    return;
+  }
+}
+
 void drawIRRaw() {
   pg=32; hdr("IR RAW CAPTURE", ST77XX_RED);
   tft.setTextColor(ST77XX_YELLOW);
@@ -1646,6 +1690,7 @@ void doWiFiScan() {
     strncpy(wifiSSIDs[i], WiFi.SSID(i).c_str(), 32);
     wifiSSIDs[i][32] = 0;
   }
+  WiFi.scanDelete();
   wifiScanning = false;
   drawWiFiScan();
 }
@@ -2321,6 +2366,14 @@ void toolsOk() {
 
 void loopHackBg() {
   unsigned long now = millis();
+  if (deauthAlert) {
+    deauthAlert = false;
+    if (pg == 14 || pg == 15) {
+      tft.fillRect(0, 28, 160, 16, ST77XX_BLACK);
+      tft.setTextColor(ST77XX_RED); tft.setCursor(4, 30);
+      tft.print("DEAUTH!");
+    }
+  }
 #if ENABLE_HACK
   // Beacon spam
   if (beaconRunning && now - beaconTimer > 100) {
@@ -2364,15 +2417,17 @@ void loopHackBg() {
   }
 
   // TV-B-Gone
-  if (tvbgRunning && now % 200 == 0) {
-    int n = sizeof(tvbgCodes)/2;
-    if (tvbgIdx < n) {
-      IrSender.sendNEC(0x00, tvbgCodes[tvbgIdx % n], 0);
+  if (tvbgRunning && now - tvbgTimer >= 200) {
+    tvbgTimer = now;
+    int n = sizeof(tvbgCodes)/sizeof(tvbgCodes[0]);
+    int total = n * 5;
+    if (tvbgIdx < total) {
+      sendIR(0x00, tvbgCodes[tvbgIdx % n], NEC);
       tvbgIdx++;
       if (pg == 31) {
         tft.fillRect(0, 30, 160, 10, ST77XX_BLACK);
         tft.setCursor(8, 32); tft.setTextColor(ST77XX_YELLOW);
-        tft.printf("Kod: %d/%d", tvbgIdx, n*5);
+        tft.printf("Kod: %d/%d", tvbgIdx, total);
       }
     } else {
       tvbgRunning = false;
