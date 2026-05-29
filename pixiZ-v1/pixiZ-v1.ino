@@ -18,6 +18,9 @@
 #define IR_RECV   13
 #define IR_SEND   27
 
+#define ST77XX_GREY   0x7BEF
+#define ST77XX_DGREY  0x39E7
+
 #define MAX_REMOTES 50
 #define MAX_NAME_LEN 24
 
@@ -42,7 +45,7 @@ Screen screen = SCR_MAIN;
 int subSel = 0;
 bool learning = false;
 int learnState = 0;
-decode_results irResult;
+IRData irResult;
 char learnName[MAX_NAME_LEN];
 
 unsigned long lastBtn = 0;
@@ -194,13 +197,13 @@ void drawIRLearn() {
     tft.setTextColor(ST77XX_WHITE);
     tft.setCursor(8, 72);
     tft.print("Protocol: ");
-    switch (irResult.decode_type) {
+    switch (irResult.protocol) {
       case NEC: tft.print("NEC"); break;
       case SONY: tft.print("SONY"); break;
       case RC5: tft.print("RC5"); break;
       case RC6: tft.print("RC6"); break;
       case SAMSUNG: tft.print("SAMSUNG"); break;
-      default: tft.print(irResult.decode_type);
+      default: tft.print(irResult.protocol);
     }
     tft.setCursor(8, 86);
     tft.print("Addr: 0x");
@@ -343,7 +346,7 @@ void saveCurrentIR() {
   strcpy(irCodes[idx].name, learnName);
   irCodes[idx].address = irResult.address;
   irCodes[idx].command = irResult.command;
-  irCodes[idx].protocol = irResult.decode_type;
+  irCodes[idx].protocol = irResult.protocol;
   irCount++;
   saveIR();
 }
@@ -382,7 +385,7 @@ void loop() {
 
   if (learning && learnState == 0) {
     if (IrReceiver.decode()) {
-      irResult = IrReceiver.decodedData;
+      irResult = IrReceiver.decodedIRData;
       IrReceiver.resume();
       learnState = 1;
       drawIRLearn();
