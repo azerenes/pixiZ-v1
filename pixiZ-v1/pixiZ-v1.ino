@@ -105,16 +105,17 @@ unsigned long pldDelay = 0;
 #endif
 
 // --- Wi-Fi attacks ---
-bool beaconRunning = false;
-bool deauthRunning = false;
-bool deauthDetect = false;
-bool pmkidRunning = false;
-bool probeSniff = false;
-bool evilTwinRunning = false;
-bool apCloneRunning = false;
+volatile int promiscuousRef = 0;
+volatile bool beaconRunning = false;
+volatile bool deauthRunning = false;
+volatile bool deauthDetect = false;
+volatile bool pmkidRunning = false;
+volatile bool probeSniff = false;
+volatile bool evilTwinRunning = false;
+volatile bool apCloneRunning = false;
 unsigned long beaconTimer = 0;
 unsigned long deauthTimer = 0;
-int beaconCount = 0, deauthCount = 0, pmkidCount = 0, probeCount = 0;
+volatile int beaconCount = 0, deauthCount = 0, pmkidCount = 0, probeCount = 0;
 char deauthTarget[18] = "FF:FF:FF:FF:FF:FF";
 char evilSSID[33] = "FreeWiFi";
 uint8_t deauthMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -140,10 +141,25 @@ unsigned long portScanTimer = 0;
 char qrText[128] = "";
 
 // --- RAW Sniffer ---
-bool rawSniffRunning = false;
+volatile bool rawSniffRunning = false;
 struct RawPkt { uint8_t src[6]; uint8_t dst[6]; uint8_t type; unsigned long t; };
 RawPkt rawBuf[10];
 volatile int rawBufIdx = 0;
+
+// --- TFT SPI mutex ---
+portMUX_TYPE tftMux = portMUX_INITIALIZER_UNLOCKED;
+#define TFT_LOCK()   taskENTER_CRITICAL(&tftMux)
+#define TFT_UNLOCK() taskEXIT_CRITICAL(&tftMux)
+
+// --- NVS write defer ---
+bool nvsDirty = false;
+unsigned long nvsDirtyTime = 0;
+
+// --- Heap guard ---
+#define SAFE_ALLOC(type, ptr, size) do { \
+  if (ESP.getFreeHeap() < (size) + 4096) { Serial.printf("[heap] FAIL %s %d\n", #ptr, (int)(size)); break; } \
+  ptr = new type; \
+} while(0)
 
 // --- Evil Portal ---
 bool portalRunning = false;
@@ -284,8 +300,9 @@ void svIR() {
       sprintf(k, "r%db%dp", r, b); prefs.putUChar(k, rmt[r].btns[b].proto);
     }
   }
+  nvsDirty = true; nvsDirtyTime = millis();
 }
-void clrIR() { rmtN = 0; prefs.putInt("rc", 0); }
+void clrIR() { rmtN = 0; prefs.putInt("rc", 0); nvsDirty = true; nvsDirtyTime = millis(); }
 
 #if ENABLE_BADUSB
 void ldPayloads() {
@@ -356,10 +373,18 @@ void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
 }
 
 void startPromiscuous() {
+  bleSpamStop();
+  if (promiscuousRef++ > 0) return;
   WiFi.mode(WIFI_AP);
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_callback(&wifiSniffCallback);
   esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+}
+
+void stopPromiscuous() {
+  if (promiscuousRef <= 0) return;
+  if (--promiscuousRef > 0) return;
+  esp_wifi_set_promiscuous(false);
 }
 
 void stopAllWirelessAttacks() {
@@ -449,8 +474,8 @@ void sendDeauthFrame(uint8_t* targetMac, uint8_t* apMac) {
 // ═══════════════════════════════════════════════════
 
 void bleSpamStart(int type) {
+  stopPromiscuous();
   if (bleAdv) { bleAdv->stop(); }
-  if (!NimBLEDevice::getInitialized()) NimBLEDevice::init("");
   bleAdv = NimBLEDevice::getAdvertising();
   bleAdv->stop();
 
@@ -642,6 +667,7 @@ void svPass() {
     sprintf(k, "pu%d", i); prefs.putString(k, passes[i].user);
     sprintf(k, "pp%d", i); prefs.putString(k, passes[i].pass);
   }
+  nvsDirty = true; nvsDirtyTime = millis();
 }
 #endif
 
@@ -902,12 +928,9 @@ void toggleRawSniff() {
   rawSniffRunning = !rawSniffRunning;
   if (rawSniffRunning) {
     memset(rawBuf, 0, sizeof(rawBuf)); rawBufIdx = 0;
-    WiFi.mode(WIFI_AP);
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_promiscuous_rx_callback(&wifiSniffCallback);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    startPromiscuous();
   } else {
-    esp_wifi_set_promiscuous(false);
+    stopPromiscuous();
   }
   drawRawSniff();
 }
@@ -933,8 +956,11 @@ void handlePortalRoot() {
   String p = portalServer->hasArg("p") ? portalServer->arg("p") : "";
   if (p.length() > 0 || e.length() > 0) {
     if (portalCredN < 5) {
-      if (e.length() > 0) snprintf(portalCreds[portalCredN], 64, "Email: %s", e.c_str());
-      else snprintf(portalCreds[portalCredN], 64, "Sifre: %s", p.c_str());
+      const char* src = e.length() > 0 ? e.c_str() : p.c_str();
+      int sl = strlen(src);
+      if (sl > 63) sl = 63;
+      const char* prefix = e.length() > 0 ? "Email: " : "Sifre: ";
+      snprintf(portalCreds[portalCredN], 64, "%s%.*s", prefix, sl, src);
       portalCredN++;
     }
     portalServer->send(200, "text/html", portalSuccess);
@@ -1282,12 +1308,13 @@ void doWardrive() {
 
 void svWardrive() {
   prefs.putInt("wdn", wdN);
-  for (int i = 0; i < wdN && i < 20; i++) { // save top 20 to NVS
+  for (int i = 0; i < wdN && i < 20; i++) {
     char k[16];
     sprintf(k, "wds%d", i); prefs.putString(k, wdAPs[i].ssid);
     sprintf(k, "wdb%d", i); prefs.putString(k, wdAPs[i].bssid);
     sprintf(k, "wdr%d", i); prefs.putInt(k, wdAPs[i].rssi);
   }
+  nvsDirty = true; nvsDirtyTime = millis();
 }
 
 void ldWardrive() {
@@ -2719,6 +2746,20 @@ void loopHackBg() {
 
 void loop() {
   unsigned long now = millis();
+
+  // NVS deferred commit
+  if (nvsDirty && now - nvsDirtyTime > 3000) {
+    nvsDirty = false;
+    prefs.end();
+  }
+
+  // Heap monitor (every 30s on serial)
+  static unsigned long heapTimer = 0;
+  if (now - heapTimer > 30000) {
+    heapTimer = now;
+    Serial.printf("[heap] free=%u min=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+  }
+
   IRloop();
   loopHackBg();
   esp_task_wdt_reset();
