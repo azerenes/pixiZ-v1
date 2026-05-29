@@ -1,4 +1,4 @@
-# pixiZ v3 — Evrensel Multi-Tool
+# pixiZ v7 — Evrensel Multi-Tool
 
 **ESP32 DevKit V4** tabanlı, **PolyCast5** + **Flipper Zero** + **Bruce** + **ESP32 Marauder** hibriti çok fonksiyonlu bir cihaz. IR öğrenme/gönderme, Bluetooth HID klavye, Wi-Fi pentest, BLE spam, BadUSB, Sub-GHz, NFC/RFID, LoRa ve daha fazlasını tek cihazda birleştirir.
 
@@ -257,6 +257,7 @@ Arduino IDE → Sketch → Include Library → Manage Libraries:
 | **NimBLE-Arduino** | `NimBLE-Arduino` by h2zero | ✅ Evet |
 | **Adafruit GFX** | `Adafruit GFX Library` | ✅ Evet |
 | **Adafruit ST7735** | `Adafruit ST7735 Library` | ✅ Evet |
+| **QRCode** | `QRCode` by ricmoo | ✅ Evet |
 | **PN532** | `Adafruit PN532` | 🔴 NFC için |
 | **CC1101** | `ELECHOUSE_CC1101` | 🔴 Sub-GHz için |
 | **LoRa** | `LoRa` by Sandeep Mistry | 🔴 LoRa için |
@@ -278,6 +279,8 @@ ESP32 board kurulumu:
 pixiZ-v1/
 ├── pixiZ-v1/
 │   └── pixiZ-v1.ino      # Tek dosya — tüm modüller içinde
+├── docs/
+│   └── WIRING.md          # Donanım bağlantı şemaları
 ├── LICENSE                # MIT Lisansı
 └── README.md              # Bu dosya
 ```
@@ -287,38 +290,68 @@ Yeni donanım eklendiğinde ilgili flag 1 yapmak yeterli.
 
 ---
 
+## Devre Şeması
+
+Tüm bağlantı detayları, pin tabloları ve uyarılar için:
+➡️ **[docs/WIRING.md](docs/WIRING.md)**
+
+### Mevcut Donanım
+
+| Bileşen | ESP32 Pini |
+|---------|-----------|
+| ST7735 TFT | CS=5, RST=16, DC=17, MOSI=23, MISO=19, SCK=18 |
+| Buton Yukarı | GPIO 32 (INPUT_PULLUP) |
+| Buton Aşağı | GPIO 33 (INPUT_PULLUP) |
+| Buton OK | GPIO 14 (INPUT_PULLUP) |
+| Buton Menü | GPIO 12 (INPUT_PULLUP) |
+| VS1838B IR Alıcı | GPIO 13 |
+| IR LED (Gönderici) | GPIO 27 (100Ω ile) |
+
+### Modül Pin Özeti (docs/WIRING.md'de detaylı)
+
+| Modül | Arayüz | CS/Seçme | Diğer |
+|-------|--------|----------|-------|
+| CC1101 (Sub-GHz) | SPI (18/19/23) | GPIO 4 | GDO2=2 |
+| PN532 (NFC/RFID) | I²C (21/22) | 0x24 | RST=15 |
+| SX1278 (LoRa) | SPI (18/19/23) | GPIO 15 | RST=2, DIO0=4 |
+| SD Kart | SPI (18/19/23) | GPIO 26 | — |
+| NRF24L01+ | SPI (18/19/23) | GPIO 4 | CE=2 |
+| TEA5767 (FM) | I²C (21/22) | 0x60 | — |
+
+---
+
 ## Yol Haritası
 
-### 🥇 Aşama 1 — Hemen (10 özellik)
-- [ ] BadUSB (Ducky Script payload + BT HID)
-- [ ] Beacon Spam (rastgele + listeden)
-- [ ] AP Clone Spam
-- [ ] Deauth Flood + Deauth Detector
-- [ ] BLE Spam (iOS + Samsung + Android + Windows + All)
-- [ ] BLE Scanner
-- [ ] TV-B-Gone
-- [ ] Probe Request Sniffer
-- [ ] PMKID Capture
-- [ ] IR RAW Capture
+### 🥇 Aşama 1 ✅ (v4)
+- [x] BadUSB (Ducky Script payload + BT HID)
+- [x] Beacon Spam (rastgele + listeden)
+- [x] AP Clone Spam
+- [x] Deauth Flood + Deauth Detector
+- [x] BLE Spam (iOS + Samsung + Android + Windows + All)
+- [x] BLE Scanner
+- [x] TV-B-Gone
+- [x] Probe Request Sniffer
+- [x] PMKID Capture
+- [x] IR RAW Capture
 
-### 🥈 Aşama 2 — Orta (10 özellik)
-- [ ] Evil Twin + Evil Portal
-- [ ] ARP Spoofing / Poisoning
-- [ ] Scan Hosts + Port Tarama
-- [ ] Wi-Fi RAW Sniffer
-- [ ] AirTag Monitor / Sniff
-- [ ] Association Sleep Attack
-- [ ] Beacon Sniff
-- [ ] ESP-NOW Mesajlaşma + Komut Gönderme
-- [ ] Çevrimdışı Şifre Yöneticisi
-- [ ] QR Kod Oluşturucu
+### 🥈 Aşama 2 ✅ (v5-v6)
+- [x] Evil Twin + Evil Portal (4 şablon: WiFi/FB/IG/Twitter)
+- [x] ARP Spoofing / Poisoning
+- [x] Scan Hosts + Port Tarama
+- [x] Wi-Fi RAW Sniffer
+- [x] AirTag Monitor / Sniff
+- [ ] Association Sleep Attack *(ileride)*
+- [x] Beacon Sniff (detaylı AP listesi)
+- [x] ESP-NOW Mesajlaşma + Komut Gönderme
+- [x] Çevrimdışı Şifre Yöneticisi (CRUD + BT autotype)
+- [x] QR Kod Oluşturucu
 
-### 🥉 Aşama 3 — Derin (8 özellik)
-- [ ] Wardriving
+### 🥉 Aşama 3 ✅ (v7)
+- [x] Wardriving (AP logger + NVS depolama)
 - [ ] Telnet / SSH Client
 - [ ] WireGuard Tünel
-- [ ] WebUI (Tarayıcıdan Kontrol)
-- [ ] Wi-Fi AP + İstemci Modu
+- [x] WebUI (Tarayıcıdan Kontrol)
+- [x] Wi-Fi AP + İstemci Modu
 - [ ] OTA Güncelleme
 - [ ] NTP Saat
 - [ ] ESP-NOW Dosya Transferi
