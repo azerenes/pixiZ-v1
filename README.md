@@ -1,30 +1,192 @@
-# pixiZ v7 — Evrensel Multi-Tool
+<p align="center">
+  <img src="https://img.shields.io/badge/pixiZ-v7.0-FF6B35?style=for-the-badge&logo=espressif&logoColor=white"/>
+  <img src="https://img.shields.io/badge/ESP32-DevKit%20V4-1FA2F2?style=for-the-badge&logo=espressif&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Lisans-MIT-00BFA5?style=for-the-badge"/>
+</p>
 
-**ESP32 DevKit V4** tabanlı, **PolyCast5** + **Flipper Zero** + **Bruce** + **ESP32 Marauder** hibriti çok fonksiyonlu bir cihaz. IR öğrenme/gönderme, Bluetooth HID klavye, Wi-Fi pentest, BLE spam, BadUSB, Sub-GHz, NFC/RFID, LoRa ve daha fazlasını tek cihazda birleştirir.
+<h1 align="center">⚡ pixiZ</h1>
+<h3 align="center">Evrensel Multi-Tool Kumanda — ESP32 Tabanlı</h3>
 
-![pixiZ](https://img.shields.io/badge/status-active-brightgreen)
-![ESP32](https://img.shields.io/badge/ESP32-DevKit%20V4-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+<p align="center">
+  <i>PolyCast5 · Flipper Zero · Bruce · ESP32 Marauder</i><br>
+  <b>IR Kumanda · BT HID Klavye · Wi-Fi Pentest · BLE Spam · BadUSB · Sub-GHz · NFC · LoRa</b>
+</p>
+
+<br>
 
 ---
 
-## İçindekiler
+## 🌐 Dil
 
-- [Özellik Listesi (Tümü)](#özellik-listesi-tümü)
-  - [📡 Wi-Fi (ESP32 Dahili — Ek Donanım Yok)](#-wi-fi-esp32-dahili--ek-donanım-yok)
-  - [📶 Bluetooth / BLE (ESP32 Dahili — Ek Donanım Yok)](#-bluetooth--ble-esp32-dahili--ek-donanım-yok)
-  - [📟 IR (VS1838B + IR LED — Mevcut Donanım)](#-ir-vs1838b--ir-led--mevcut-donanım)
-  - [🎛️ Sub-GHz (CC1101 Modülü Gerekli)](#️-sub-ghz-cc1101-modülü-gerekli)
-  - [📇 NFC/RFID (PN532 Modülü Gerekli)](#-nfcrfid-pn532-modülü-gerekli)
-  - [📻 LoRa (SX1278 Modülü Gerekli)](#-lora-sx1278-modülü-gerekli)
-  - [🖥️ ESP-NOW (ESP32 Dahili)](#️-esp-now-esp32-dahili)
-  - [⌨️ BadUSB / Ducky Script](#️-badusb--ducky-script)
-  - [🔐 Güvenlik / Diğer](#-güvenlik--diğer)
-  - [🧩 NRF24 (NRF24 Modülü Gerekli)](#-nrf24-nrf24-modülü-gerekli)
-  - [🎵 FM Radyo (TEA5767 Modülü Gerekli)](#-fm-radyo-tea5767-modülü-gerekli)
-- [Devre Şeması](#devre-şeması)
-- [Gerekli Kütüphaneler](#gerekli-kütüphaneler)
-- [Yol Haritası](#yol-haritası)
+> **English:** [`README_EN.md`](README_EN.md)
+
+---
+
+## 📋 Genel Bakış
+
+**pixiZ**, bir ESP32 DevKit V4'ü eksiksiz bir multi-tool kumandaya dönüştürür. Mevcut donanımıyla (ST7735 TFT, 4 buton, IR alıcı/LED) IR öğrenme/gönderme, Bluetooth HID klavye ve geniş Wi-Fi/BLE saldırı araçlarını destekler. İsteğe bağlı modüller (CC1101, PN532, SX1278 vb.) ile Sub-GHz, NFC, LoRa ve daha fazlası eklenebilir.
+
+> **11 kategoride 65+ özellik** — tek bir `.ino` dosyasında.
+
+---
+
+## ✨ Özellik Matrisi
+
+### 📡 Wi-Fi (Dahili — Ek Donanım Yok)
+
+| # | Özellik | Durum | Açıklama |
+|---|---------|--------|----------|
+| 1 | **Ağ Tarama** | 🟢 Hazır | Çevredeki AP'leri tara, SSID/RSSI/kanal/şifreleme göster |
+| 2 | **Beacon Spam (Rastgele)** | 🟢 Hazır | 100+ sahte AP bas — Wi-Fi listelerini kaos et |
+| 3 | **Beacon Spam (Listeden)** | 🟢 Hazır | Gerçekçi SSID listesinden sahte ağ yayını |
+| 4 | **AP Clone Spam** | 🟢 Hazır | Gerçek AP'leri klonla, hedefi şaşırt |
+| 5 | **Deauth Flood** | 🟢 Hazır | Herhangi bir ağdaki istemcilerin bağlantısını kes |
+| 6 | **Deauth Dedektör** | 🟢 Hazır | Çevredeki deauth saldırılarını algıla |
+| 7 | **PMKID Yakalama** | 🟢 Hazır | WPA2/WPA3 el sıkışması yakala, Hashcat ile kır |
+| 8 | **Probe Request Sniffer** | 🟢 Hazır | Cihazların aradığı ağları gör (gizlilik denetimi) |
+| 9 | **Evil Twin** | 🟢 Hazır | AP SSID + BSSID klonla, orijinali deauth'la, istemcileri ele geçir |
+| 10 | **Evil Portal** | 🟢 Hazır | 4 şablon: WiFi Update, Facebook, Instagram, Twitter giriş sayfaları |
+| 11 | **Wardriving** | 🟢 Hazır | AP'leri (SSID/BSSID/RSSI/Ch/Enc) NVS'ye kaydet, istatistik göster |
+| 12 | **RAW Sniffer** | 🟢 Hazır | Canlı 802.11 paket monitörü (Beacon/Deauth/Probe/Data) |
+| 13 | **Port Tarama** | 🟢 Hazır | 19 yaygın port için hedef IP'ye TCP bağlantı taraması |
+| 14 | **ARP Spoofing** | 🟢 Hazır | ARP tablolarını zehirle, trafiği yönlendir (MITM) |
+| 15 | **Beacon Sniff** | 🟢 Hazır | Derin AP keşfi — şifreleme, kanal, sinyal %'si |
+| 16 | **WebUI** | 🟢 Hazır | Web panosu: Beacon/Deauth aç/kapa, tara, yeniden başlat |
+
+### 📶 BLE (Dahili)
+
+| # | Özellik | Durum | Açıklama |
+|---|---------|--------|----------|
+| 1 | **BLE Tarayıcı** | 🟢 Hazır | Tüm BLE cihazlarını tara, adres ve RSSI göster |
+| 2 | **BLE Spam — iOS (AirDrop)** | 🟢 Hazır | iPhone'larda AirDrop popup'ı tetikle |
+| 3 | **BLE Spam — Samsung** | 🟢 Hazır | Samsung cihazlarda Quick Share popup'ı tetikle |
+| 4 | **BLE Spam — Windows** | 🟢 Hazır | Windows'ta Swift Pair popup'ı tetikle |
+| 5 | **BLE Spam — Android** | 🟢 Hazır | Android'de Fast Pair popup'ı tetikle |
+| 6 | **BLE Spam — Tümü** | 🟢 Hazır | Tüm platformlara aynı anda saldırı |
+| 7 | **AirTag Sniff** | 🟢 Hazır | Apple FindMy cihazlarını tespit et |
+| 8 | **BT HID Klavye** | 🟢 Hazır | Bluetooth klavye olarak herhangi bir cihaza bağlan |
+
+### 📟 IR (VS1838B + IR LED)
+
+| # | Özellik | Durum | Açıklama |
+|---|---------|--------|----------|
+| 1 | **Öğren + Kaydet** | 🟢 Hazır | 38kHz IR sinyalini öğren, NVS'de sakla |
+| 2 | **Gönder (Çoklu Buton)** | 🟢 Hazır | Kumanda başına 16 buton, kayıtlı sinyalleri tekrarla |
+| 3 | **TV-B-Gone** | 🟢 Hazır | 14+ kapatma kodu × 5 tur — TV'leri kapat |
+| 4 | **RAW Yakalama** | 🟢 Hazır | Bilinmeyen protokolleri ham yakala: Proto/Addr/Cmd göster |
+| 5 | **Özel Protokoller** | 🟢 Hazır | NEC, NECext, SIRC, Samsung32, RC5, RC6 |
+
+### ⌨️ BadUSB / Ducky Script
+
+| # | Özellik | Durum | Açıklama |
+|---|---------|--------|----------|
+| 1 | **BT Klavye Bağlantısı** | 🟢 Hazır | Bluetooth HID klavye olarak eşleş |
+| 2 | **Ducky Script Motoru** | 🟢 Hazır | DELAY, STRING, ENTER, GUI, CTRL-ALT-DEL, ALT-F4 vb. |
+| 3 | **NVS Payload Depolama** | 🟢 Hazır | 256 bayta kadar 10 payload kaydet/yükle |
+
+### 🛡️ Güvenlik / Araçlar
+
+| # | Özellik | Durum | Açıklama |
+|---|---------|--------|----------|
+| 1 | **Şifre Yöneticisi** | 🟢 Hazır | Servis/kullanıcı/şifre CRUD, BT otomatik yazma |
+| 2 | **QR Kod Oluşturucu** | 🟢 Hazır | WiFi QR veya özel metin, TFT'de göster |
+| 3 | **ESP-NOW Mesajlaşma** | 🟢 Hazır | İki ESP32 arasında mesaj gönder/al |
+
+### 🔌 Harici Modüller (Donanım Gerekli)
+
+| Modül | Arayüz | Özellikler | Durum |
+|-------|--------|------------|-------|
+| **CC1101** (Sub-GHz) | SPI | Tara, Tekrarla, Jammer, Spektrum | 🔴 Modül gerekli |
+| **PN532** (NFC/RFID) | I²C | Oku, Klonla, Yaz, Taklit Et, Amiibo | 🔴 Modül gerekli |
+| **SX1278** (LoRa) | SPI | Uzun menzil mesajlaşma, Uzaktan kumanda | 🔴 Modül gerekli |
+| **SD Kart** | SPI | Dosya gezgini, IR yedekleri, wardriving logları | 🔴 Modül gerekli |
+| **NRF24L01+** | SPI | Jammer, Spektrum, Mousejack | 🔴 Modül gerekli |
+| **TEA5767** (FM) | I²C | Yayın, Spektrum, RDS hijack | 🔴 Modül gerekli |
+
+---
+
+## 🔧 Donanım
+
+### Mevcut Pinout
+
+| Bileşen | ESP32 Pini |
+|---------|------------|
+| ST7735 TFT | CS=5, RST=16, DC=17, MOSI=23, MISO=19, SCK=18 |
+| Buton UP | GPIO 32 (INPUT_PULLUP) |
+| Buton DOWN | GPIO 33 (INPUT_PULLUP) |
+| Buton OK | GPIO 14 (INPUT_PULLUP) |
+| Buton MENU | GPIO 12 (INPUT_PULLUP) |
+| VS1838B IR Alıcı | GPIO 13 |
+| IR LED (Gönderici) | GPIO 27 (100Ω direnç) |
+
+Tüm modüllerin bağlantı şemaları için → **[docs/WIRING.md](docs/WIRING.md)**
+
+---
+
+## 📦 Kütüphaneler (Arduino IDE)
+
+Sketch → Include Library → Manage Libraries:
+
+| Kütüphane | Arduino Adı | Gerekli |
+|-----------|-------------|---------|
+| **IRremote** | `IRremote` by ArminJo | ✅ Evet |
+| **BLEKeyboard** | `HijelHID_BLEKeyboard` by HijelHub | ✅ Evet |
+| **NimBLE-Arduino** | `NimBLE-Arduino` by h2zero | ✅ Evet |
+| **Adafruit GFX** | `Adafruit GFX Library` | ✅ Evet |
+| **Adafruit ST7735** | `Adafruit ST7735 Library` | ✅ Evet |
+| **QRCode** | `QRCode` by ricmoo | ✅ Evet |
+| **PN532** | `Adafruit PN532` | 🔴 NFC için |
+| **CC1101** | `ELECHOUSE_CC1101` | 🔴 Sub-GHz için |
+| **LoRa** | `LoRa` by Sandeep Mistry | 🔴 LoRa için |
+| **SD Card** | `SD` (Dahili) | 🔴 SD için |
+| **NRF24** | `RF24` by TMRh20 | 🔴 NRF24 için |
+
+**Board Kurulumu:**
+- URL ekle: `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
+- Board: `ESP32 Dev Module`
+- Partition: `No OTA (Large APP)`
+
+---
+
+## 📁 Proje Yapısı
+
+```
+pixiZ-v1/
+├── pixiZ-v1/
+│   └── pixiZ-v1.ino        # Tek dosya ürün yazılımı (~2800 satır)
+├── docs/
+│   └── WIRING.md            # Donanım bağlantı şemaları
+├── README.md                # Türkçe dokümantasyon (bu dosya)
+├── README_EN.md             # İngilizce dokümantasyon
+└── LICENSE                  # MIT Lisansı
+```
+
+Tüm modüller `#define ENABLE_xxx 0/1` ile kontrol edilir.
+
+---
+
+## 🛤️ Yol Haritası
+
+| Aşama | Sürüm | Durum |
+|-------|-------|-------|
+| **🥇 Aşama 1** — Wi-Fi/BLE/IR saldırıları | v4 | ✅ Tamamlandı |
+| **🥈 Aşama 2** — Evil Twin, Port Tarama, QR, Şifreler | v5-v6 | ✅ Tamamlandı |
+| **🥉 Aşama 3** — Wardriving, WebUI, Portal şablonları | v7 | ✅ Tamamlandı |
+| **🔌 Aşama 4** — Donanım modülleri | v8+ | 📅 Modüller geldiğinde |
+
+---
+
+## 📜 Lisans
+
+MIT Lisansı — Detaylar için [LICENSE](LICENSE) dosyasına bakın.
+
+---
+
+<p align="center">
+  <a href="https://github.com/azerenes/pixiZ-v1">
+    <img src="https://img.shields.io/badge/github-azerenes/pixiZ--v1-181717?style=for-the-badge&logo=github"/>
+  </a>
+</p>
 
 ---
 

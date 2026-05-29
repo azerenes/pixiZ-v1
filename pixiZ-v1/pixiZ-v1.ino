@@ -119,6 +119,7 @@ char deauthTarget[18] = "FF:FF:FF:FF:FF:FF";
 char evilSSID[33] = "FreeWiFi";
 uint8_t deauthMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 bool evilTwinActive = false;
+unsigned long evilTwinTimer = 0;
 int evilScanList = 0;
 char evilScanAPs[20][33];
 char evilScanBSSID[20][18];
@@ -184,6 +185,8 @@ bool bleScanRunning = false;
 // --- TV-B-Gone ---
 bool tvbgRunning = false;
 int tvbgIdx = 0;
+int tvbgRound = 0;
+unsigned long tvbgTimer = 0;
 
 // --- IR RAW ---
 bool irRawMode = false;
@@ -310,8 +313,11 @@ void svPayloads() {
 //  WI-FI PROMISCUOUS / RAW FRAME
 // ═══════════════════════════════════════════════════
 
+volatile int deauthDetectFlag = 0; // ISR → main comm
+
 void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
+  if (pkt->rx_ctrl.sig_len < 2) return; // unsigned underflow guard
   uint8_t* f = pkt->payload;
   uint16_t fc = f[0] | (f[1] << 8);
   uint8_t stype = (fc >> 4) & 0x0F;
@@ -320,27 +326,10 @@ void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   // Probe request (type=0 stype=4)
   if (typef == 0 && stype == 4 && probeSniff) {
     probeCount++;
-    if (probeCount <= 100) {
-      // Find SSID in probe request (starts at offset 24 + variable tags)
-      int off = 24;
-      while (off < pkt->rx_ctrl.sig_len - 2) {
-        if (f[off] == 0x00 && off + 2 + f[off+1] <= pkt->rx_ctrl.sig_len) {
-          break;
-        }
-        off++;
-      }
-      if (off + 2 < pkt->rx_ctrl.sig_len && f[off] == 0x00) {
-        int slen = f[off+1];
-        if (slen > 0 && slen < 33 && off+2+slen <= pkt->rx_ctrl.sig_len) {
-          // Got probe SSID — could display if we had more UI space
-        }
-      }
-    }
   }
 
   // EAPOL (PMKID)
   if (typef == 1 && stype == 8 && pmkidRunning) {
-    // Check for EAPOL frame (type 0x88, 0x8e)
     int dLen = pkt->rx_ctrl.sig_len;
     if (dLen > 54) {
       for (int i = 24; i < dLen-7; i++) {
@@ -352,11 +341,7 @@ void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   // Deauth detector (type=0 stype=12)
   if (typef == 0 && stype == 12 && deauthDetect) {
     deauthCount++;
-    if (deauthCount <= 3) {
-      tft.fillRect(0, 28, 160, 16, ST77XX_BLACK);
-      tft.setTextColor(ST77XX_RED); tft.setCursor(4, 30);
-      tft.print("DEAUTH!");
-    }
+    deauthDetectFlag = 1;
   }
 
   // RAW Sniffer — store packet info
@@ -375,6 +360,15 @@ void startPromiscuous() {
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_callback(&wifiSniffCallback);
   esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+}
+
+void stopAllWirelessAttacks() {
+  beaconRunning = false; deauthRunning = false; deauthDetect = false;
+  pmkidRunning = false; probeSniff = false; rawSniffRunning = false;
+  arpRunning = false; evilTwinActive = false;
+  if (portalRunning) stopEvilPortal();
+  esp_wifi_set_promiscuous(false);
+  WiFi.mode(WIFI_OFF);
 }
 
 void stopPromiscuous() {
@@ -456,12 +450,12 @@ void sendDeauthFrame(uint8_t* targetMac, uint8_t* apMac) {
 
 void bleSpamStart(int type) {
   if (bleAdv) { bleAdv->stop(); }
-  NimBLEDevice::init("");
+  if (!NimBLEDevice::getInitialized()) NimBLEDevice::init("");
   bleAdv = NimBLEDevice::getAdvertising();
   bleAdv->stop();
 
   NimBLEAdvertisementData d;
-  uint8_t raw[31];
+  uint8_t raw[34];
   int len = 0;
 
   // Flags
@@ -519,28 +513,29 @@ void bleSpamStop() {
 //  TV-B-GONE (IR)
 // ═══════════════════════════════════════════════════
 
-// Simplified TV-B-Gone with common Samsung/LG/Sony/Philips power codes
-const uint16_t tvbgCodes[] = {
-  0xE0E040BF, // Samsung power
-  0x20DF10EF, // LG power
-  0xA55A,     // Sony power
-  0x0C,       // Philips RC5 power
-  0x0D,       // Philips RC6 power
-  0xE0E0E01F, // Samsung toggle
-  0x807F,     // Panasonic power
-  0xE13E,     // Toshiba power
-  0xBA45,     // Sharp power
-  0x0F,       // NEC power (many brands)
-  0xBC,       // Mitsubishi
-  0x1C,       // JVC
-  0x1E,       // Zenith
-  0x1F,       // RCA
+struct TVBGCode { uint16_t code; uint8_t proto; };
+const TVBGCode tvbgCodes[] = {
+  {0xE0E040BF, 0}, // NEC Samsung power
+  {0x20DF10EF, 0}, // NEC LG power
+  {0xA55A,     SONY},  // Sony power
+  {0x0C,       RC5},   // Philips RC5 power
+  {0x0D,       RC6},   // Philips RC6 power
+  {0xE0E0E01F, 0}, // NEC Samsung toggle
+  {0x807F,     0}, // NEC Panasonic power
+  {0xE13E,     0}, // NEC Toshiba power
+  {0xBA45,     0}, // NEC Sharp power
+  {0x0F,       0}, // NEC power (many brands)
+  {0xBC,       0}, // NEC Mitsubishi
+  {0x1C,       0}, // NEC JVC
+  {0x1E,       0}, // NEC Zenith
+  {0x1F,       0}, // NEC RCA
 };
+const int TVBG_N = sizeof(tvbgCodes) / sizeof(tvbgCodes[0]);
 
 void tvbgSend() {
   for (int i = 0; i < 5; i++) { // 5 rounds
-    for (int j = 0; j < sizeof(tvbgCodes)/2; j++) {
-      IrSender.sendNEC(0x00, tvbgCodes[j], 0);
+    for (int j = 0; j < TVBG_N; j++) {
+      irSendSignal(0x00, tvbgCodes[j].code, tvbgCodes[j].proto);
       delay(5);
     }
   }
@@ -703,14 +698,22 @@ void drawEvilScan() {
     tft.setTextColor(ST77XX_GREY); tft.setCursor(8, 50); tft.print("Ag bulunamadi.");
     ftr("MENU=Geri"); return;
   }
-  for (int i = 0; i < evilScanList && i < 5; i++) {
-    int y = 24+i*19; bool s = i==sel2;
+  if (sel2 < 0) sel2 = 0;
+  if (sel2 >= evilScanList) sel2 = evilScanList - 1;
+  int esScroll = sel2 < 2 ? 0 : (sel2 > evilScanList - 3 ? evilScanList - 5 : sel2 - 2);
+  if (esScroll < 0) esScroll = 0;
+  if (esScroll + 5 > evilScanList) esScroll = evilScanList - 5;
+  if (esScroll < 0) esScroll = 0;
+  int disp = evilScanList > 5 ? 5 : evilScanList;
+  for (int i = 0; i < disp; i++) {
+    int ei = esScroll + i;
+    int y = 24+i*19; bool s = ei==sel2;
     tft.fillRect(2, y, 156, 17, s ? ST77XX_RED : ST77XX_BLACK);
     if (s) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_RED);
     tft.setTextColor(s ? ST77XX_BLACK : ST77XX_WHITE);
-    tft.setCursor(6, y+4); tft.print(evilScanAPs[i]);
+    tft.setCursor(6, y+4); tft.print(evilScanAPs[ei]);
     tft.setTextColor(ST77XX_GREY);
-    tft.setCursor(126, y+4); tft.printf("%d", evilScanRSSI[i]);
+    tft.setCursor(126, y+4); tft.printf("%d", evilScanRSSI[ei]);
   }
   ftr("OK=Sec  UP/DOWN=Gez  MENU=Geri");
 }
@@ -807,7 +810,7 @@ void doPortScan() {
     char host[16];
     sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
     if (c.connect(host, portScanPorts[i])) {
-      portScanOpen[portScanOpenN++] = portScanPorts[i];
+      if (portScanOpenN < 19) portScanOpen[portScanOpenN++] = portScanPorts[i];
       c.stop();
     }
     // Update display every 5 ports
@@ -881,10 +884,11 @@ void drawRawSniff() {
     RawPkt* p = &rawBuf[idx];
     if (p->type == 0) continue;
     const char* tn = "?";
-    if (p->type==0x80) tn="Beacon";
-    else if (p->type==0xC0||p->type==0xA0) tn="Deauth";
-    else if (p->type==0x40) tn="ProbeR";
-    else if (p->type==0x48) tn="Data";
+    uint8_t t = p->type;
+    if (t==8) tn="Beacon";
+    else if (t==12||t==10) tn="Deauth";
+    else if (t==4) tn="ProbeR";
+    else if (t&0x20) tn="Data";
     tft.setTextColor(ST77XX_GREY); tft.setCursor(4, y);
     tft.printf("[%s]", tn);
     tft.setTextColor(ST77XX_WHITE); tft.print(p->src);
@@ -970,7 +974,7 @@ void startEvilPortal(const char* ssid) {
   esp_wifi_set_promiscuous(false);
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(portalIP, portalIP, IPAddress(255,255,255,0));
-  WiFi.softAP(portalSSID, NULL, 1, 0, 1);
+  WiFi.softAP(portalSSID, NULL, 1, 0, 0);
   delay(500);
 
   // Start DNS server
@@ -988,8 +992,8 @@ void startEvilPortal(const char* ssid) {
 }
 
 void stopEvilPortal() {
-  if (portalServer) portalServer->close();
-  if (dnsServer) dnsServer->stop();
+  if (portalServer) { portalServer->close(); delete portalServer; portalServer = NULL; }
+  if (dnsServer) { dnsServer->stop(); delete dnsServer; dnsServer = NULL; }
   WiFi.softAPdisconnect(true);
   portalRunning = false;
 }
@@ -1057,7 +1061,7 @@ void drawAirTagSniff() {
 void startAirTagSniff() {
   airtagRunning = true;
   airtagCount = 0;
-  NimBLEDevice::init("");
+  if (!NimBLEDevice::getInitialized()) NimBLEDevice::init("");
   NimBLEScan* s = NimBLEDevice::getScan();
   s->setActiveScan(false);
   s->setInterval(100);
@@ -1163,8 +1167,10 @@ void actESPNOW() {
     }
     else if (up()) {
       int l = strlen(espnowMsg);
-      if (l < 64) { espnowMsg[l] = 'A' + (esp_random()%26); espnowMsg[l+1]=0; }
-      if (l > 0) { espnowMsg[l] = 'a' + (esp_random()%26); espnowMsg[l+1]=0; }
+      if (l < 64) {
+        espnowMsg[l] = (l == 0) ? ('A' + (esp_random()%26)) : ('a' + (esp_random()%26));
+        espnowMsg[l+1] = 0;
+      }
       drawESPNOWMsg();
     }
     else if (down() && strlen(espnowMsg) > 0) {
@@ -1372,7 +1378,7 @@ void handleWebRestart() { webuiServer->send(200, "text/html", "Restart..."); del
 
 void startWebUI() {
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("pixiZ-WebUI", NULL, 1, 0, 1);
+  WiFi.softAP("pixiZ-WebUI", NULL, 1, 0, 0);
   delay(500);
   if (!webuiServer) webuiServer = new WebServer(80);
   webuiServer->on("/", handleWebUI);
@@ -1384,7 +1390,7 @@ void startWebUI() {
   webuiRunning = true;
 }
 void stopWebUI() {
-  if (webuiServer) webuiServer->close();
+  if (webuiServer) { webuiServer->close(); delete webuiServer; webuiServer = NULL; }
   WiFi.softAPdisconnect(true);
   webuiRunning = false;
 }
@@ -1544,12 +1550,8 @@ void setup() {
 
   splash(); delay(1500);
   pg = 0; sel = 0;
-  // Default port scan target to gateway
-  WiFi.mode(WIFI_STA); WiFi.disconnect(); delay(100);
-  IPAddress gw = WiFi.gatewayIP();
-  if (gw) { portScanTarget[0]=gw[0]; portScanTarget[1]=gw[1]; portScanTarget[2]=gw[2]; portScanTarget[3]=gw[3]; }
-  else { portScanTarget[0]=192; portScanTarget[1]=168; portScanTarget[2]=1; portScanTarget[3]=1; }
-  WiFi.mode(WIFI_OFF);
+  // Default port scan target (can't get gateway without connection)
+  portScanTarget[0]=192; portScanTarget[1]=168; portScanTarget[2]=1; portScanTarget[3]=1;
   drawMain();
 }
 
@@ -1708,6 +1710,16 @@ void drawLearn() {
   }
   ftr("OK=Learn/Save  MENU=Cancel");
 }
+void irSendSignal(uint16_t addr, uint16_t cmd, uint8_t proto) {
+  switch (proto) {
+    case SONY:   IrSender.sendSony(addr, cmd, 0); break;
+    case RC5:    IrSender.sendRC5(addr, cmd, 0); break;
+    case RC6:    IrSender.sendRC6(addr, cmd, 0); break;
+    case SAMSUNG: IrSender.sendSamsung(addr, cmd, 0); break;
+    default:     IrSender.sendNEC(addr, cmd, 0); break;
+  }
+}
+
 void drawSend() {
   pg=4; hdr("SENDING", ST77XX_GREEN);
   IRBtn* b = &rmt[sel2].btns[sel3];
@@ -1716,7 +1728,7 @@ void drawSend() {
   tft.setCursor(8, 56); tft.setTextColor(ST77XX_CYAN); tft.print("Button: ");
   tft.setTextColor(ST77XX_WHITE); tft.print(b->name);
   tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 78); tft.print("Sending IR...");
-  for (int i = 0; i < 3; i++) { IrSender.sendNEC(b->addr, b->cmd, 0); delay(50); }
+  for (int i = 0; i < 3; i++) { irSendSignal(b->addr, b->cmd, b->proto); delay(50); }
   tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 96); tft.print("Done!");
   delay(600);
 }
@@ -1769,12 +1781,38 @@ void irSave() {
   tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 64); tft.print("Kaydedildi!");
   delay(600);
 }
+void actIR() {
+  if (pg == 1) { // Remote list
+    if (menu()) { pg=0; drawMain(); }
+    else if (ok()) {
+      if (rmtN == 0) { irAdd(); }
+      else { sel3=0; drawBtnList(); }
+    }
+    else if (up()) { int o=sel2; sel2=(sel2-1+rmtN)%rmtN; if (rmtN>0) drawIRList(); }
+    else if (down()) { int o=sel2; sel2=(sel2+1)%rmtN; if (rmtN>0) drawIRList(); }
+  } else if (pg == 2) { // Button list
+    if (menu()) { sel2=0; drawIRList(); }
+    else if (ok()) {
+      int c = rmt[sel2].bc;
+      if (sel3 < c) { drawSend(); }
+      else { irLearn(sel2); }
+    }
+    else if (up()) { int t = rmt[sel2].bc + (rmt[sel2].bc < MAX_BTNS ? 1 : 0); sel3=(sel3-1+t)%t; drawBtnList(); }
+    else if (down()) { int t = rmt[sel2].bc + (rmt[sel2].bc < MAX_BTNS ? 1 : 0); sel3=(sel3+1)%t; drawBtnList(); }
+  } else if (pg == 3) { // Learn
+    if (menu()) { lrn = false; sel3 = rmt[sel2].bc - 1; if (sel3 < 0) sel3 = 0; drawBtnList(); }
+    else if (ok()) { if (lrnSt == 1) irSave(); }
+  } else if (pg == 4) { // Send
+    if (menu()) { pg=2; drawBtnList(); }
+  }
+}
+
 void IRloop() {
   if (lrn && lrnSt == 0 && IrReceiver.decode()) {
     irRes = IrReceiver.decodedIRData; IrReceiver.resume();
     lrnSt = 1; drawLearn();
   }
-  if (irRawMode && irRawSt == 0 && IrReceiver.decode()) {
+  if (irRawMode && irRawSt <= 0 && IrReceiver.decode()) {
     irRes = IrReceiver.decodedIRData; IrReceiver.resume();
     irRawSt = 1;
     tft.fillRect(0, 30, 160, 80, ST77XX_BLACK);
@@ -1947,7 +1985,7 @@ void actWiFi() {
         {
           char qrBuf[128] = {0};
           if (WiFi.status() == WL_CONNECTED) {
-            snprintf(qrBuf, 127, "WIFI:S:%s;T:WPA;P:%s;;", WiFi.SSID().c_str(), "");
+            snprintf(qrBuf, 127, "WIFI:S:%s;T:WPA;P:;", WiFi.SSID().c_str());
           } else {
             snprintf(qrBuf, 127, "pixiZ v6 Multi-Tool");
           }
@@ -2124,69 +2162,51 @@ void drawHackAttack(int a) {
 }
 
 void toggleHack(int a) {
+  // Stop all other attacks before starting a new one
+  if (!((a==0&&beaconRunning)||(a==1&&deauthRunning)||(a==2&&deauthDetect)||(a==3&&pmkidRunning)||(a==4&&probeSniff))) {
+    beaconRunning=false; deauthRunning=false; deauthDetect=false;
+    pmkidRunning=false; probeSniff=false;
+    esp_wifi_set_promiscuous(false);
+  }
+
   switch (a) {
     case 0: // Beacon Spam
       beaconRunning = !beaconRunning;
       if (beaconRunning) {
-        WiFi.mode(WIFI_MODE_NULL);
-        delay(100);
-        startPromiscuous();
-        beaconCount = 0;
-      } else {
-        beaconRunning = false;
-        stopPromiscuous();
+        WiFi.mode(WIFI_MODE_NULL); delay(100);
+        startPromiscuous(); beaconCount = 0;
       }
       drawHackAttack(0);
       break;
     case 1: // Deauth Flood
       deauthRunning = !deauthRunning;
       if (deauthRunning) {
-        WiFi.mode(WIFI_MODE_NULL);
-        delay(100);
-        startPromiscuous();
-        deauthCount = 0;
-      } else {
-        deauthRunning = false;
-        stopPromiscuous();
+        WiFi.mode(WIFI_MODE_NULL); delay(100);
+        startPromiscuous(); deauthCount = 0;
       }
       drawHackAttack(1);
       break;
     case 2: // Deauth Detector
       deauthDetect = !deauthDetect;
       if (deauthDetect) {
-        WiFi.mode(WIFI_MODE_NULL);
-        delay(100);
-        startPromiscuous();
-        deauthCount = 0;
-      } else {
-        deauthDetect = false;
-        stopPromiscuous();
+        WiFi.mode(WIFI_MODE_NULL); delay(100);
+        startPromiscuous(); deauthCount = 0;
       }
       drawHackAttack(2);
       break;
     case 3: // PMKID
       pmkidRunning = !pmkidRunning;
       if (pmkidRunning) {
-        WiFi.mode(WIFI_MODE_NULL);
-        delay(100);
-        startPromiscuous();
-        pmkidCount = 0;
-      } else {
-        pmkidRunning = false;
-        stopPromiscuous();
+        WiFi.mode(WIFI_MODE_NULL); delay(100);
+        startPromiscuous(); pmkidCount = 0;
       }
       drawHackAttack(3);
       break;
     case 4: // Probe Sniff
       probeSniff = !probeSniff;
       if (probeSniff) {
-        WiFi.mode(WIFI_MODE_NULL);
-        delay(100);
-        startPromiscuous();
-        probeCount = 0;
-      } else {
-        probeSniff = false;
-        stopPromiscuous();
+        WiFi.mode(WIFI_MODE_NULL); delay(100);
+        startPromiscuous(); probeCount = 0;
       }
       drawHackAttack(4);
       break;
@@ -2591,6 +2611,17 @@ void toolsOk() {
 
 void loopHackBg() {
   unsigned long now = millis();
+
+  // Evil Portal server + DNS
+  if (portalRunning) {
+    if (portalServer) portalServer->handleClient();
+    handlePortalDNS();
+  }
+  // WebUI server
+  if (webuiRunning && webuiServer) {
+    webuiServer->handleClient();
+  }
+
 #if ENABLE_HACK
   // Beacon spam
   if (beaconRunning && now - beaconTimer > 100) {
@@ -2615,7 +2646,9 @@ void loopHackBg() {
   // Deauth flood
   if (deauthRunning && now - deauthTimer > 200) {
     deauthTimer = now;
-    uint8_t apMac[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t apMac[6];
+    for (int i = 0; i < 6; i++) apMac[i] = esp_random() & 0xFF;
+    apMac[0] = (apMac[0] & 0xFC) | 0x02; // locally administered, unicast
     sendDeauthFrame(deauthMac, apMac);
     deauthCount++;
     if (deauthCount % 10 == 0 && pg == 15) {
@@ -2626,27 +2659,45 @@ void loopHackBg() {
   }
 
   // Evil Twin deauth
-  if (evilTwinActive && now % 250 == 0) {
+  if (evilTwinActive && now - evilTwinTimer > 250) {
+    evilTwinTimer = now;
     uint8_t mac[6];
     sscanf(evilTargetBSSID, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
            &mac[0],&mac[1],&mac[2],&mac[3],&mac[4],&mac[5]);
     sendDeauthFrame(deauthMac, mac);
   }
 
+  // Deauth detector display (ISR-safe)
+  if (deauthDetectFlag) {
+    deauthDetectFlag = 0;
+    if (pg == 16) {
+      tft.fillRect(0, 40, 160, 12, ST77XX_BLACK);
+      tft.setCursor(8, 48); tft.setTextColor(ST77XX_WHITE);
+      tft.printf("Tespit: %d deauth", deauthCount);
+    }
+    if (deauthCount <= 3) {
+      tft.fillRect(0, 28, 160, 16, ST77XX_BLACK);
+      tft.setTextColor(ST77XX_RED); tft.setCursor(4, 30);
+      tft.print("DEAUTH!");
+    }
+  }
+
   // TV-B-Gone
-  if (tvbgRunning && now % 200 == 0) {
-    int n = sizeof(tvbgCodes)/2;
-    if (tvbgIdx < n) {
-      IrSender.sendNEC(0x00, tvbgCodes[tvbgIdx % n], 0);
+  if (tvbgRunning && now - tvbgTimer > 200) {
+    tvbgTimer = now;
+    int total = TVBG_N * 5;
+    if (tvbgIdx < total) {
+      int codeIdx = tvbgIdx % TVBG_N;
+      irSendSignal(0x00, tvbgCodes[codeIdx].code, tvbgCodes[codeIdx].proto);
       tvbgIdx++;
       if (pg == 31) {
         tft.fillRect(0, 30, 160, 10, ST77XX_BLACK);
         tft.setCursor(8, 32); tft.setTextColor(ST77XX_YELLOW);
-        tft.printf("Kod: %d/%d", tvbgIdx, n*5);
+        tft.printf("Kod: %d/%d", tvbgIdx, total);
       }
     } else {
       tvbgRunning = false;
-      tvbgIdx = 0;
+      tvbgIdx = 0; tvbgRound = 0;
       if (pg == 31) {
         tft.fillRect(0, 30, 160, 30, ST77XX_BLACK);
         tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 40); tft.print("Tamam!");
@@ -2728,9 +2779,6 @@ void loop() {
         break;
       case 47: actWardrive(); break;
       case 48: actWebUI(); break;
-        if (menu()) { arpRunning=false; esp_wifi_set_promiscuous(false); pg=12; drawHackMenu(); }
-        else if (ok()) { toggleARPSpoof(); }
-        break;
 #endif
 #if ENABLE_BLESPAM || ENABLE_BLESCAN
       case 22: actBLEMenu(); break;
