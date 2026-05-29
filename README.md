@@ -97,12 +97,15 @@ GPIO 27 ── 1kΩ ──┐
 
 Arduino IDE → Sketch → Include Library → Manage Libraries:
 
-| Kütüphane | Yazan | Kurulum |
-|-----------|-------|---------|
-| **IRremote** | shirriff / z3t0 / ArminJo | `IRremote` ara ve kur |
-| **Adafruit GFX** | Adafruit | `Adafruit GFX Library` |
-| **Adafruit ST7735** | Adafruit | `Adafruit ST7735 Library` |
-| **BleKeyboard** | T-vK | `ESP32 BLE Keyboard` |
+Arduino IDE → Sketch → Include Library → Manage Libraries:
+
+| Kütüphane | Arduino'daki Adı | Yazan |
+|-----------|-----------------|-------|
+| **IRremote** | `IRremote` | ArminJo |
+| **HijelHID_BLEKeyboard** | `HijelHID_BLEKeyboard` | HijelHub |
+| **NimBLE-Arduino** | `NimBLE-Arduino` | h2zero |
+| **Adafruit GFX** | `Adafruit GFX Library` | Adafruit |
+| **Adafruit ST7735** | `Adafruit ST7735 Library` | Adafruit |
 
 ESP32 board desteği için:
 - Arduino IDE: Dosya → Tercihler → "Ek Board Yöneticisi URL'leri"ne `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` ekle

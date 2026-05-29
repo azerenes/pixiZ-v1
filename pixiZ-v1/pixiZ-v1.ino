@@ -2,7 +2,7 @@
 #include <Adafruit_ST7735.h>
 #include <IRremote.h>
 #include <Preferences.h>
-#include <BleKeyboard.h>
+#include <HijelHID_BLEKeyboard.h>
 
 #define TFT_CS    5
 #define TFT_RST   16
@@ -26,7 +26,7 @@
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 Preferences prefs;
-BleKeyboard bleKeyboard("pixiZ Remote", "pixiZ", 100);
+HijelHID_BLEKeyboard bleKeyboard("pixiZ Remote", "pixiZ", 100);
 
 struct IRCode {
   char name[MAX_NAME_LEN];
