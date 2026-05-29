@@ -12,11 +12,11 @@
 
 #define BTN_UP    32
 #define BTN_DOWN  33
-#define BTN_OK    25
-#define BTN_MENU  26
+#define BTN_OK    14
+#define BTN_MENU  12
 
 #define IR_RECV   13
-#define IR_SEND   14
+#define IR_SEND   27
 
 #define MAX_REMOTES 50
 #define MAX_NAME_LEN 24

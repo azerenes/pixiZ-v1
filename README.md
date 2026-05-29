@@ -35,13 +35,13 @@ ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğ
   │  GPIO 23 ─── TFT MOSI                    │
   │  GPIO 18 ─── TFT SCLK                    │
   │                                          │
-  │  GPIO 32 ─── BTN_UP  ──/~~ GND          │
-  │  GPIO 33 ─── BTN_DOWN──/~~ GND          │
-  │  GPIO 25 ─── BTN_OK  ──/~~ GND          │
-  │  GPIO 26 ─── BTN_MENU──/~~ GND          │
-  │                                          │
-  │  GPIO 13 ─── IR Alıcı (VS1838B) OUT     │
-  │  GPIO 14 ─── IR LED (gönderme)          │
+│  GPIO 32 ─── BTN_UP  ──/~~ GND          │
+│  GPIO 33 ─── BTN_DOWN──/~~ GND          │
+│  GPIO 14 ─── BTN_OK  ──/~~ GND          │
+│  GPIO 12 ─── BTN_MENU──/~~ GND          │
+│                                          │
+│  GPIO 13 ─── IR Alıcı (VS1838B) OUT     │
+│  GPIO 27 ─── IR LED (gönderme)          │
   │              │                           │
   │              +─/\/\/──>|── GND           │
   │               100Ω    IR LED             │
@@ -68,8 +68,8 @@ ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğ
 |-------|------|
 | UP    | GPIO 32 |
 | DOWN  | GPIO 33 |
-| OK    | GPIO 25 |
-| MENU  | GPIO 26 |
+| OK    | GPIO 14 |
+| MENU  | GPIO 12 |
 
 ### IR Alıcı (VS1838B / TSOP38238)
 
@@ -81,10 +81,10 @@ ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğ
 
 ### IR LED (Gönderme)
 
-IR LED'i doğrudan GPIO 14 üzerinden 100Ω seri dirençle GND'ye bağlayın. Daha güçlü sinyal için:
+IR LED'i GPIO 27 üzerinden 100Ω seri dirençle GND'ye bağlayın. Daha güçlü sinyal için:
 
 ```
-GPIO 14 ── 1kΩ ──┐
+GPIO 27 ── 1kΩ ──┐
                  Baz
               [2N2222]
                  Emiter ── GND
