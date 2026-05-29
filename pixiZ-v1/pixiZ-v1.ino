@@ -25,7 +25,7 @@
 #define MAX_NAME    20
 #define MAX_BNAME   14
 
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 Preferences prefs;
 HijelHID_BLEKeyboard bleKeyboard("pixiZ Remote", "pixiZ", 100);
 
@@ -569,5 +569,5 @@ void loop() {
         break;
     }
   }
-  delay(10);
+  delay(5);
 }
