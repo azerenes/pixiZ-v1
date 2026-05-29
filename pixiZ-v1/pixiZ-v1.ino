@@ -10,25 +10,21 @@
 // 1 = Modern flat design, 0 = Retro pixel design
 #define MODERN_DESIGN 1
 
-#define TFT_LED   1
-#define TFT_SCLK  2
-#define TFT_MOSI  4
-#define TFT_DC    6
-#define TFT_RST   8
-#define TFT_CS    10
+// FIX: v1 used GPIO 6,7,8,10 which are ESP32 flash pins — crash on boot.
+// Changed to standard DevKit V4 safe pins:
+#define TFT_LED   1   // UART TX — OK if Serial not used
+#define TFT_SCLK  18  // Was GPIO 2 (flash conflict)
+#define TFT_MOSI  23  // Was GPIO 4 (flash conflict)
+#define TFT_DC    17  // Was GPIO 6 (FLASH PIN! crash)
+#define TFT_RST   16  // Was GPIO 8 (FLASH PIN! crash)
+#define TFT_CS    5   // Was GPIO 10 (FLASH PIN! crash)
 #define BTN_AI    33
-#define BTN_UP    35
-#define BTN_DOWN  37
-#define BTN_MENU  39
-#define MIC_PIN   7
+#define BTN_UP    32  // Was 35 — GPIO 35 has no internal pullup
+#define BTN_DOWN  15  // Was 37 — GPIO 37 has no internal pullup
+#define BTN_MENU  14  // Was 39 — GPIO 39 has no internal pullup
+#define MIC_PIN   34  // Was GPIO 7 (FLASH PIN! crash) — now ADC1_CH6, no WiFi conflict
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
-const char* ssid     = "ssıd";
-const char* password = "wifi password";
-const String apiKey    = "yourapıkey";
-const String exKey     = "yourexkey";
-const String scriptURL = "yourscripturl";
 
 #define C_BG      0x0000
 #define C_SURF    0x0841
@@ -86,35 +82,46 @@ String getGun(){
   return String(g[t.tm_wday]);
 }
 
+String httpGet(const String& url, int timeout) {
+  if (WiFi.status() != WL_CONNECTED) return "---";
+  WiFiClientSecure c; c.setInsecure();
+  HTTPClient h; h.setTimeout(timeout);
+  h.begin(c, url);
+  int code = h.GET();
+  String r = (code == 200) ? h.getString() : "---";
+  h.end();
+  return r;
+}
+
 String kriptoAl(String s){
-  WiFiClientSecure c; c.setInsecure(); HTTPClient h; h.setTimeout(2000);
-  h.begin(c,"https://api.btcturk.com/api/v2/ticker?pairSymbol="+s);
-  if(h.GET()==200){
-    DynamicJsonDocument d(1024); deserializeJson(d,h.getString());
-    float v=d["data"][0]["last"].as<float>();
-    if(v>=1000000) return "$"+String((long)(v/1000))+"K";
-    return "$"+String((long)v);
-  }
-  h.end(); return "---";
+  String r = httpGet("https://api.btcturk.com/api/v2/ticker?pairSymbol="+s, 2000);
+  if(r == "---") return "---";
+  DynamicJsonDocument d(1024);
+  if(deserializeJson(d, r)) return "---";
+  float v = d["data"][0]["last"].as<float>();
+  if(v >= 1000000) return "$"+String((long)(v/1000))+"K";
+  return "$"+String((long)v);
 }
 
 String kurAl(String b,String t){
-  WiFiClientSecure c; c.setInsecure(); HTTPClient h; h.setTimeout(1500);
-  h.begin(c,"https://v6.exchangerate-api.com/v6/"+exKey+"/pair/"+b+"/"+t);
-  if(h.GET()==200){
-    StaticJsonDocument<200> d; deserializeJson(d,h.getString());
-    return String(d["conversion_rate"].as<float>(),2)+" TL";
-  }
-  h.end(); return "---";
+  String r = httpGet("https://v6.exchangerate-api.com/v6/"+exKey+"/pair/"+b+"/"+t, 1500);
+  if(r == "---") return "---";
+  StaticJsonDocument<200> d;
+  if(deserializeJson(d, r)) return "---";
+  return String(d["conversion_rate"].as<float>(),2)+" TL";
 }
 
 String gorevAl(){
-  WiFiClientSecure c; c.setInsecure(); HTTPClient h; h.setTimeout(4000);
+  if (WiFi.status() != WL_CONNECTED) return "Baglanti yok.";
+  WiFiClientSecure c; c.setInsecure();
+  HTTPClient h; h.setTimeout(4000);
   h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  h.begin(c,scriptURL);
-  String r="Gorev yok.";
-  if(h.GET()==200) r=trFix(h.getString());
-  h.end(); return r;
+  h.begin(c, scriptURL);
+  int code = h.GET();
+  String r = "Gorev yok.";
+  if(code == 200) r = trFix(h.getString());
+  h.end();
+  return r;
 }
 
 void gradH(int x,int y,int w,int h,uint16_t c1,uint16_t c2){
@@ -574,7 +581,7 @@ void splashBoot(){
   tft.drawFastHLine(20,78,120,C_WHITE);
   tft.setTextColor(C_LGREY);
   tft.setCursor(12,88); tft.print("WiFi baglaniyor");
-  WiFi.begin(ssid, password);
+  WiFi.mode(WIFI_STA); WiFi.begin(ssid, password);
   int cnt=0;
   while(WiFi.status()!=WL_CONNECTED && cnt<20){
     tft.fillRect(10,104,140,10,C_BG);
@@ -600,7 +607,7 @@ void splashBoot(){
   tft.setCursor(40,80); tft.print("AI Assistant");
   tft.setTextColor(C_GREY);
   tft.setCursor(12,96); tft.print("WiFi baglaniyor");
-  WiFi.begin(ssid, password);
+  WiFi.mode(WIFI_STA); WiFi.begin(ssid, password);
   int cnt=0;
   while(WiFi.status()!=WL_CONNECTED && cnt<20){
     tft.fillRect(10,106,140,8,C_BG);
@@ -631,6 +638,7 @@ void geriDon(){
 }
 
 void setup(){
+  Serial.begin(115200);
   pinMode(TFT_LED,OUTPUT); digitalWrite(TFT_LED,HIGH);
   pinMode(BTN_AI,INPUT_PULLUP); pinMode(BTN_UP,INPUT_PULLUP);
   pinMode(BTN_DOWN,INPUT_PULLUP); pinMode(BTN_MENU,INPUT_PULLUP);
@@ -643,6 +651,7 @@ void setup(){
   splashBoot();
   configTime(3*3600,0,"pool.ntp.org");
   wavBuf=(uint8_t*)malloc(WAV_SIZE+44);
+  if(!wavBuf) { tft.setTextColor(C_RED); tft.setCursor(8,50); tft.print("RAM yetersiz!"); while(1) delay(1000); }
   tft.fillScreen(C_BG);
   sNo=0; slaytGoster(sNo); sTime=millis();
 }
