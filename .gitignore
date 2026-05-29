@@ -1,0 +1,11 @@
+.pio/
+.pioenvs/
+.piolib/
+.python/
+__pycache__/
+*.o
+*.elf
+*.map
+*.bin
+*.hex
+build/
