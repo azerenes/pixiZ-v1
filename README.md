@@ -1,166 +1,140 @@
-# pixiZ-v1 — AI Assistant
+# pixiZ Universal Remote
 
-ESP32-S2 Mini tabanlı, ST7735 TFT ekran ve sesli AI asistan özellikli çok fonksiyonlu masaüstü cihaz.
+ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğrenme/gönderme, Bluetooth HID klavye ve Wi-Fi kontrollerini tek cihazda birleştirir.
 
-![pixiZ-v1](https://img.shields.io/badge/status-active-brightgreen)
-![ESP32](https://img.shields.io/badge/ESP32-S2%20Mini-blue)
+![pixiZ](https://img.shields.io/badge/status-active-brightgreen)
+![ESP32](https://img.shields.io/badge/ESP32-DevKit%20V4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
 ## Özellikler
 
-| # | Özellik | Açıklama |
-|---|---------|----------|
-| 1 | **Dijital Saat** | NTP ile otomatik zaman senkronizasyonu, Türkçe gün isimleri |
-| 2 | **Dolar Kuru** | ExchangeRate API ile canlı USD/TRY |
-| 3 | **Euro Kuru** | ExchangeRate API ile canlı EUR/TRY |
-| 4 | **Bitcoin** | BTCTurk API ile anlık BTC/USDT |
-| 5 | **Ethereum** | BTCTurk API ile anlık ETH/USDT |
-| 6 | **Görev Listesi** | Google Apps Script ile hatırlatıcılar |
-| 7 | **AI Sesli Asistan** | MAX4466 mikrofon + Gemini API ile sesli komut |
-| 8 | **Slayt Yönetimi** | Gösterilecek slaytları aç/kapa |
-| 9 | **Otomatik Geçiş** | 12 saniyede bir slayt değişimi |
+| Mod | Özellik | Durum |
+|-----|---------|-------|
+| **IR Remote** | Kumandaları öğren ve sakla (NEC, Sony, RC5, RC6, Samsung) | ✅ Hazır |
+| **IR Remote** | Öğrenilen kodları gönder | ✅ Hazır |
+| **Bluetooth KB** | Bluetooth HID klavye olarak bağlan | ✅ Hazır |
+| **WiFi Kontrol** | HTTP/ESP-NOW ile cihaz kontrolü | 🔄 Planlandı |
+| **Ayarlar** | WiFi yapılandırma, cihaz bilgisi, IR temizleme, restart | ✅ Hazır |
 
 ---
 
 ## Devre Şeması
 
 ```
-                        ┌─────────────────────────┐
-                        │      ESP32-S2 Mini       │
-                        │                         │
-                        │  3V3 ─── VCC (ST7735)   │
-                        │  3V3 ─── VCC (MAX4466)  │
-                        │  GND ─── GND (tüm)      │
-                        │                         │
-                        │  GPIO 1  ─── TFT LED    │
-                        │  GPIO 2  ─── TFT SCLK   │
-                        │  GPIO 4  ─── TFT MOSI   │
-                        │  GPIO 6  ─── TFT DC     │
-                        │  GPIO 8  ─── TFT RST    │
-                        │  GPIO 10 ─── TFT CS     │
-                        │                         │
-                        │  GPIO 7  ─── MAX4466 OUT│
-                        │                         │
-                        │  GPIO 33 ─── BTN_AI     │
-                        │  GPIO 35 ─── BTN_UP     │
-                        │  GPIO 37 ─── BTN_DOWN   │
-                        │  GPIO 39 ─── BTN_MENU   │
-                        │                         │
-                        │  USB ─── 5V Güç         │
-                        └─────────────────────────┘
+  ESP32 DevKit V4
+  ┌──────────────────────────────────────────┐
+  │                                          │
+  │  3.3V ─── VCC (ST7735, IR-RX)           │
+  │  GND  ─── GND (tüm bileşenler)           │
+  │                                          │
+  │  GPIO 5  ─── TFT CS                      │
+  │  GPIO 16 ─── TFT RST                     │
+  │  GPIO 17 ─── TFT DC                      │
+  │  GPIO 23 ─── TFT MOSI                    │
+  │  GPIO 18 ─── TFT SCLK                    │
+  │                                          │
+  │  GPIO 32 ─── BTN_UP  ──/~~ GND          │
+  │  GPIO 33 ─── BTN_DOWN──/~~ GND          │
+  │  GPIO 25 ─── BTN_OK  ──/~~ GND          │
+  │  GPIO 26 ─── BTN_MENU──/~~ GND          │
+  │                                          │
+  │  GPIO 13 ─── IR Alıcı (VS1838B) OUT     │
+  │  GPIO 14 ─── IR LED (gönderme)          │
+  │              │                           │
+  │              +─/\/\/──>|── GND           │
+  │               100Ω    IR LED             │
+  │                                          │
+  └──────────────────────────────────────────┘
 ```
 
 ### ST7735 TFT (1.8" 160x128 SPI)
 
-| TFT Pin | Bağlantı |
-|---------|----------|
-| LED     | GPIO 1 (veya 3.3V) |
-| SCLK    | GPIO 2 |
-| MOSI    | GPIO 4 |
-| DC      | GPIO 6 |
-| RST     | GPIO 8 |
-| CS      | GPIO 10 |
-| VCC     | 3.3V |
-| GND     | GND |
+| TFT | ESP32 |
+|-----|-------|
+| CS  | GPIO 5 |
+| RST | GPIO 16 |
+| DC  | GPIO 17 |
+| MOSI | GPIO 23 |
+| SCLK | GPIO 18 |
+| VCC | 3.3V |
+| GND | GND |
+| LED | 3.3V (veya GPIO ile PWM) |
 
-### MAX4466 Mikrofon
-
-| MAX4466 | Bağlantı |
-|---------|----------|
-| OUT     | GPIO 7 (ADC) |
-| VCC     | 3.3V |
-| GND     | GND |
-
-### Butonlar (INPUT_PULLUP)
+### Butonlar (INPUT_PULLUP — butonun diğer ucu GND)
 
 | Buton | GPIO |
 |-------|------|
-| AI    | GPIO 33 |
-| UP    | GPIO 35 |
-| DOWN  | GPIO 37 |
-| MENU  | GPIO 39 |
+| UP    | GPIO 32 |
+| DOWN  | GPIO 33 |
+| OK    | GPIO 25 |
+| MENU  | GPIO 26 |
 
-Tüm butonların diğer ucu **GND**'ye bağlanır.
+### IR Alıcı (VS1838B / TSOP38238)
+
+| Pin | Bağlantı |
+|-----|----------|
+| OUT | GPIO 13 |
+| VCC | 3.3V |
+| GND | GND |
+
+### IR LED (Gönderme)
+
+IR LED'i doğrudan GPIO 14 üzerinden 100Ω seri dirençle GND'ye bağlayın. Daha güçlü sinyal için:
+
+```
+GPIO 14 ── 1kΩ ──┐
+                 Baz
+              [2N2222]
+                 Emiter ── GND
+                 Kollektör ── IR LED ── 100Ω ── 3.3V
+```
 
 ---
 
-## Kurulum
+## Gerekli Kütüphaneler
 
-### 1. Gerekli Kütüphaneler
+Arduino IDE → Sketch → Include Library → Manage Libraries:
 
-Arduino IDE'yi açıp **Sketch → Include Library → Manage Libraries**'den aşağıdakileri kur:
-
-| Kütüphane | Sürüm | Yazan |
-|-----------|-------|-------|
-| Adafruit GFX | ≥1.11 | Adafruit |
-| Adafruit ST7735 | ≥1.10 | Adafruit |
-| ArduinoJson | ≥7.0 | Benoit Blanchon |
+| Kütüphane | Yazan | Kurulum |
+|-----------|-------|---------|
+| **IRremote** | shirriff / z3t0 / ArminJo | `IRremote` ara ve kur |
+| **Adafruit GFX** | Adafruit | `Adafruit GFX Library` |
+| **Adafruit ST7735** | Adafruit | `Adafruit ST7735 Library` |
+| **BleKeyboard** | T-vK | `ESP32 BLE Keyboard` |
 
 ESP32 board desteği için:
-- **Arduino IDE**: Dosya → Tercihler → "Ek Board Yöneticisi URL'leri"ne `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` ekle
+- Arduino IDE: Dosya → Tercihler → "Ek Board Yöneticisi URL'leri"ne `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` ekle
 - Araçlar → Board → Board Manager → "ESP32" ara ve kur
-
-### 2. WiFi ve API Anahtarları
-
-Kodun başındaki şu değişkenleri kendine göre düzenle:
-
-```cpp
-const char* ssid     = "wifi_adiniz";
-const char* password = "wifi_sifreniz";
-const String apiKey    = "GEMINI_API_ANAHTARI";
-const String exKey     = "EXCHANGERATE_API_ANAHTARI";
-const String scriptURL = "GOOGLE_APPS_SCRIPT_URL";
-```
-
-### 3. API Anahtarları Nasıl Alınır
-
-| Servis | Nasıl Alınır |
-|--------|-------------|
-| **Gemini API** | https://aistudio.google.com/app/apikey → "Create API Key" |
-| **ExchangeRate API** | https://exchangerate-api.com → Ücretsiz kayıt, 1500 sorgu/ay |
-| **Google Apps Script** | script.google.com → Yeni proje → Web uygulaması olarak yayınla |
+- Board seçimi: `ESP32 Dev Module`
 
 ---
 
 ## Kullanım
 
-### Buton Kontrolleri
+### Navigasyon
 
-| Tuş | Fonksiyon |
-|-----|-----------|
-| **UP** | Bir önceki slayt |
-| **DOWN** | Bir sonraki slayt |
-| **MENU** | Ana menüyü aç |
-| **AI** | Sesli asistanı başlat (basılı tut, bırakınca gönder) |
+| Tuş | İşlev |
+|-----|-------|
+| **UP / DOWN** | Menüde gezin |
+| **OK** | Seç / Onayla |
+| **MENU** | Geri dön |
 
-### Menü İşlemleri
+### IR Remote
 
-| Menü | İşlem |
-|------|-------|
-| Canlı Piyasa | Tüm kur ve kriptolar tek ekranda |
-| Slayt Yönetimi | Hangi slaytların gösterileceğini seç |
-| Hatırlatıcı | Google Apps Script'ten görevleri getir |
-| WiFi Bilgisi | Bağlı ağın SSID/IP/RSSI bilgisi |
-| Yeniden Başlat | Cihazı resetle |
+1. Ana menüden **IR Remote** seç
+2. **OK** ile yeni kumanda öğren
+3. Kumandayı IR alıcıya tutup bir tuşa bas
+4. Sinyal alındığında **OK** ile kaydet
+5. Kayıtlı kumandaları listeden seçip **OK** ile gönder
 
----
+### Bluetooth Klavye
 
-## Ekran Görüntüleri
-
-| Slayt | Renk Teması |
-|-------|-------------|
-| Saat | Mavi/Mor |
-| Dolar | Yeşil |
-| Euro | Altın |
-| Bitcoin | Turuncu |
-| Ethereum | Mavi |
-| Görevler | Kırmızı/Pembe |
-
-Tema, kodun başındaki `MODERN_DESIGN` sabiti ile değiştirilebilir:
-- `1` = Modern düz tasarım
-- `0` = Retro piksel tasarım
+1. Ana menüden **Bluetooth KB** seç
+2. Bilgisayar/telefonun Bluetooth ayarlarından `pixiZ Remote` cihazını eşle
+3. Bağlandığında ekranda "CONNECTED" yazar
+4. *(Yakında: Bluetooth üzerinden tuş vuruşu gönderme)*
 
 ---
 
@@ -176,6 +150,19 @@ pixiZ-v1/
 
 ---
 
+## Yol Haritası
+
+- [x] IR öğrenme ve saklama
+- [x] IR kod gönderme
+- [x] Bluetooth HID klavye
+- [ ] Bluetooth üzerinden makro/tuş vuruşu gönderme
+- [ ] Wi-Fi / ESP-NOW cihaz kontrolü
+- [ ] IR kodlarını kategorilendirme
+- [ ] Daha fazla IR protokol desteği
+- [ ] OTA güncelleme
+
+---
+
 ## Lisans
 
 MIT License — Detaylar için [LICENSE](LICENSE) dosyasına bakın.
@@ -186,3 +173,4 @@ MIT License — Detaylar için [LICENSE](LICENSE) dosyasına bakın.
 
 - GitHub: [@azerenes](https://github.com/azerenes)
 - Proje: [github.com/azerenes/pixiZ-v1](https://github.com/azerenes/pixiZ-v1)
+- İlham: [PolyCast5](https://polycast5.com) — Multi-Tool Everything Remote
