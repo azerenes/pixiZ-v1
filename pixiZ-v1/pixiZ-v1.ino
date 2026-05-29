@@ -141,9 +141,9 @@ char qrText[128] = "";
 
 // --- RAW Sniffer ---
 bool rawSniffRunning = false;
-struct RawPkt { char src[18], dst[18]; uint8_t type; unsigned long t; };
+struct RawPkt { uint8_t src[6]; uint8_t dst[6]; uint8_t type; unsigned long t; };
 RawPkt rawBuf[10];
-int rawBufIdx = 0;
+volatile int rawBufIdx = 0;
 
 // --- Evil Portal ---
 bool portalRunning = false;
@@ -344,11 +344,11 @@ void wifiSniffCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     deauthDetectFlag = 1;
   }
 
-  // RAW Sniffer — store packet info
+  // RAW Sniffer — store raw packet info (no snprintf in ISR)
   if (rawSniffRunning) {
     RawPkt* p = &rawBuf[rawBufIdx % 10];
-    snprintf(p->src, 18, "%02X:%02X:%02X:%02X:%02X:%02X", f[10],f[11],f[12],f[13],f[14],f[15]);
-    snprintf(p->dst, 18, "%02X:%02X:%02X:%02X:%02X:%02X", f[4],f[5],f[6],f[7],f[8],f[9]);
+    memcpy(p->src, f+10, 6);
+    memcpy(p->dst, f+4, 6);
     p->type = fc >> 4;
     p->t = millis();
     rawBufIdx++;
@@ -803,17 +803,16 @@ void doPortScan() {
   portScanIdx = 0;
   portScanOpenN = 0;
   int nPorts = sizeof(portScanPorts)/sizeof(portScanPorts[0]);
+  char host[16];
+  sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
 
   for (int i = 0; i < nPorts && portScanRunning; i++) {
     portScanIdx = i;
     WiFiClient c;
-    char host[16];
-    sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
     if (c.connect(host, portScanPorts[i])) {
       if (portScanOpenN < 19) portScanOpen[portScanOpenN++] = portScanPorts[i];
       c.stop();
     }
-    // Update display every 5 ports
     if (i % 5 == 0 && pg == 21) {
       tft.fillRect(0, 24, 160, 30, ST77XX_BLACK);
       tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 30);
@@ -821,6 +820,7 @@ void doPortScan() {
       tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
       tft.printf("Acik: %d", portScanOpenN);
     }
+    yield();
   }
   portScanRunning = false;
   if (pg == 21) drawPortScan();
@@ -891,7 +891,8 @@ void drawRawSniff() {
     else if (t&0x20) tn="Data";
     tft.setTextColor(ST77XX_GREY); tft.setCursor(4, y);
     tft.printf("[%s]", tn);
-    tft.setTextColor(ST77XX_WHITE); tft.print(p->src);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.printf("%02X:%02X:%02X:%02X:%02X:%02X", p->src[0],p->src[1],p->src[2],p->src[3],p->src[4],p->src[5]);
     y += 10;
   }
   ftr("OK=Ac/Kapat  MENU=Cikis");
@@ -1519,8 +1520,12 @@ void splash() {
   tft.setCursor(12, 100); tft.print("ESP32 DevKit V4");
 }
 
+#include <esp_task_wdt.h>
+
 void setup() {
   Serial.begin(115200);
+  esp_task_wdt_init(10, true);
+  esp_task_wdt_add(NULL);
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_OK, INPUT_PULLUP);
@@ -2716,6 +2721,7 @@ void loop() {
   unsigned long now = millis();
   IRloop();
   loopHackBg();
+  esp_task_wdt_reset();
 
   if ((up()||down()||ok()||menu()) && now-lastBtn>DB) {
     lastBtn = now;
