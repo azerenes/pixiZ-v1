@@ -137,7 +137,12 @@ int portScanPorts[] = {21,22,23,25,53,80,110,143,443,445,993,995,8080,8443,3306,
 int portScanOpen[19];
 int portScanOpenN = 0;
 int portScanIdx = 0;
-unsigned long portScanTimer = 0;
+WiFiClient portScanClient;
+int portScanNext = 0;
+int portScanState = 0; // 0=idle, 1=connecting
+unsigned long portScanConnStart = 0;
+int portScanNPorts = 0;
+char portScanHost[16];
 
 char qrText[128] = "";
 
@@ -223,15 +228,15 @@ const int DB = 200;
 
 char wifiSSIDs[10][33];
 int wifiN = 0;
-unsigned long wifiScanStart = 0;
 bool wifiScanning = false;
+bool wifiScanAsync = false;
 
 // ═══════════════════════════════════════════════════
 //  UI YARDIMCILAR
 // ═══════════════════════════════════════════════════
 
 void hdr(const char* s, uint16_t c) {
-  tft.fillScreen(ST77XX_BLACK);
+  tft.fillRect(0, 20, 160, 108, ST77XX_BLACK);
   tft.fillRect(0, 0, 160, 20, c);
   tft.drawFastHLine(0, 20, 160, c>>1&0x7BEF);
   tft.setTextSize(1); tft.setTextColor(ST77XX_WHITE);
@@ -802,7 +807,7 @@ void drawPortScan() {
   pg = 21; hdr("PORT TARAMA", ST77XX_RED);
   if (portScanRunning) {
     tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 30);
-    tft.printf("Taniyor: %d", portScanPorts[portScanIdx]);
+    tft.printf("Taniyor: %d/%d", portScanIdx, portScanNPorts);
     tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
     tft.printf("Acik: %d", portScanOpenN);
     ftr("MENU=Durdur"); return;
@@ -825,32 +830,60 @@ void drawPortScan() {
   ftr("OK=Baslat  MENU=Geri");
 }
 
-void doPortScan() {
+void startPortScan() {
   portScanRunning = true;
   portScanIdx = 0;
   portScanOpenN = 0;
-  int nPorts = sizeof(portScanPorts)/sizeof(portScanPorts[0]);
-  char host[16];
-  sprintf(host, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
+  portScanNext = 0;
+  portScanState = 0;
+  portScanNPorts = sizeof(portScanPorts)/sizeof(portScanPorts[0]);
+  sprintf(portScanHost, "%d.%d.%d.%d", portScanTarget[0],portScanTarget[1],portScanTarget[2],portScanTarget[3]);
+  drawPortScan();
+}
 
-  for (int i = 0; i < nPorts && portScanRunning; i++) {
-    portScanIdx = i;
-    WiFiClient c;
-    if (c.connect(host, portScanPorts[i])) {
-      if (portScanOpenN < 19) portScanOpen[portScanOpenN++] = portScanPorts[i];
-      c.stop();
+void loopPortScan() {
+  if (!portScanRunning) return;
+  unsigned long now = millis();
+
+  if (portScanState == 1) {
+    // waiting for connection result
+    if (portScanClient.connected()) {
+      portScanIdx = portScanNext;
+      if (portScanOpenN < 19) portScanOpen[portScanOpenN++] = portScanPorts[portScanNext-1];
+      portScanClient.stop();
+      portScanState = 0; // proceed to next
+    } else if (now - portScanConnStart >= 2000) {
+      portScanClient.stop(); // timeout
+      portScanState = 0;
+    } else {
+      return; // still waiting
     }
-    if (i % 5 == 0 && pg == 21) {
+  }
+
+  if (portScanState == 0) {
+    if (portScanNext >= portScanNPorts) {
+      portScanRunning = false;
+      if (pg == 21) drawPortScan();
+      return;
+    }
+    portScanNext++;
+    portScanIdx = portScanNext;
+    portScanConnStart = now;
+    if (!portScanClient.connect(portScanHost, portScanPorts[portScanNext-1])) {
+      // immediate failure
+      portScanClient.stop();
+      // try next on next tick
+    } else {
+      portScanState = 1; // waiting for connection
+    }
+    if (portScanIdx % 5 == 0 && pg == 21) {
       tft.fillRect(0, 24, 160, 30, ST77XX_BLACK);
       tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 30);
-      tft.printf("Taniyor: %d/%d", i+1, nPorts);
+      tft.printf("Taniyor: %d/%d", portScanIdx, portScanNPorts);
       tft.setCursor(8, 50); tft.setTextColor(ST77XX_GREEN);
       tft.printf("Acik: %d", portScanOpenN);
     }
-    yield();
   }
-  portScanRunning = false;
-  if (pg == 21) drawPortScan();
 }
 
 // ═══════════════════════════════════════════════════
@@ -1972,15 +2005,24 @@ void doWiFiScan() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
-  int n = WiFi.scanNetworks();
+  WiFi.scanNetworks(true);
+  wifiScanAsync = true;
+}
+
+void loopWiFiScan() {
+  if (!wifiScanAsync) return;
+  int n = WiFi.scanComplete();
+  if (n == -1 || n == -2) return;
   if (n > 10) n = 10;
   wifiN = n;
   for (int i = 0; i < n; i++) {
     strncpy(wifiSSIDs[i], WiFi.SSID(i).c_str(), 32);
     wifiSSIDs[i][32] = 0;
   }
+  WiFi.scanDelete();
   wifiScanning = false;
-  drawWiFiScan();
+  wifiScanAsync = false;
+  if (pg == 6) drawWiFiScan();
 }
 int wifiSel = 0;
 
@@ -2654,20 +2696,17 @@ void loopHackBg() {
   }
 
 #if ENABLE_HACK
-  // Beacon spam
-  if (beaconRunning && now - beaconTimer > 100) {
+  // Beacon spam - one frame per tick (25ms = ~40/sec)
+  if (beaconRunning && now - beaconTimer > 25) {
     beaconTimer = now;
     const char* names[] = {"FreeWiFi","Starbucks","ATT_WiFi","Xfinity","iPhone","AndroidAP","WiFi-2.4G","Guest_Net","Cafe_WiFi","Hotel_Free","Airport_WiFi","Library_NET","School_WiFi","Metro_Free","Park_WiFi"};
     int nc = sizeof(names)/sizeof(names[0]);
-    for (int i = 0; i < 4; i++) {
-      char ssid[33];
-      int r = esp_random() % nc;
-      snprintf(ssid, 32, "%s_%d", names[r], (int)(esp_random() % 9999));
-      sendBeaconFrame(ssid, 1 + (esp_random() % 11));
-    }
-    beaconCount += 4;
-    // Update display periodically
-    if (beaconCount % 40 == 0 && pg == 13) {
+    char ssid[33];
+    int r = esp_random() % nc;
+    snprintf(ssid, 32, "%s_%d", names[r], (int)(esp_random() % 9999));
+    sendBeaconFrame(ssid, 1 + (esp_random() % 11));
+    beaconCount++;
+    if (beaconCount % 10 == 0 && pg == 13) {
       tft.fillRect(0, 40, 160, 12, ST77XX_BLACK);
       tft.setCursor(8, 48); tft.setTextColor(ST77XX_WHITE);
       tft.printf("Gonderilen: %d", beaconCount);
@@ -2761,6 +2800,8 @@ void loop() {
 
   IRloop();
   loopHackBg();
+  loopPortScan();
+  loopWiFiScan();
   esp_task_wdt_reset();
 
   if ((up()||down()||ok()||menu()) && now-lastBtn>DB) {
@@ -2805,8 +2846,8 @@ void loop() {
         break;
       case 19: case 20: actEvilTwin(); break;
       case 21:
-        if (menu()) { portScanRunning = false; pg=12; drawHackMenu(); }
-        else if (ok() && !portScanRunning) { doPortScan(); drawPortScan(); }
+        if (menu()) { portScanRunning = false; portScanClient.stop(); pg=12; drawHackMenu(); }
+        else if (ok() && !portScanRunning) { startPortScan(); }
         break;
       case 40:
         if (menu()) { rawSniffRunning=false; esp_wifi_set_promiscuous(false); pg=12; drawHackMenu(); }
