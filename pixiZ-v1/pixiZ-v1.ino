@@ -12,11 +12,11 @@
 
 #define BTN_UP    32
 #define BTN_DOWN  33
-#define BTN_OK    25
-#define BTN_MENU  26
+#define BTN_OK    14  // Was 25 — GPIO 25 is DAC, slow edge
+#define BTN_MENU  12  // Was 26 — GPIO 26 is DAC, slow edge
 
 #define IR_RECV   13
-#define IR_SEND   14
+#define IR_SEND   27
 
 #define MAX_REMOTES 50
 #define MAX_NAME_LEN 24
@@ -42,7 +42,7 @@ Screen screen = SCR_MAIN;
 int subSel = 0;
 bool learning = false;
 int learnState = 0;
-decode_results irResult;
+IRData irResult;
 char learnName[MAX_NAME_LEN];
 
 unsigned long lastBtn = 0;
@@ -194,13 +194,13 @@ void drawIRLearn() {
     tft.setTextColor(ST77XX_WHITE);
     tft.setCursor(8, 72);
     tft.print("Protocol: ");
-    switch (irResult.decode_type) {
+    switch (irResult.protocol) {
       case NEC: tft.print("NEC"); break;
       case SONY: tft.print("SONY"); break;
       case RC5: tft.print("RC5"); break;
       case RC6: tft.print("RC6"); break;
       case SAMSUNG: tft.print("SAMSUNG"); break;
-      default: tft.print(irResult.decode_type);
+      default: tft.print(irResult.protocol);
     }
     tft.setCursor(8, 86);
     tft.print("Addr: 0x");
@@ -212,6 +212,17 @@ void drawIRLearn() {
   footer("OK=Learn  MENU=Cancel");
 }
 
+void sendIR(uint16_t addr, uint16_t cmd, uint8_t proto) {
+  switch ((decode_type_t)proto) {
+    case NEC: IrSender.sendNEC(addr, cmd, 0); break;
+    case SONY: IrSender.sendSony(addr, cmd, 12); break;
+    case RC5: IrSender.sendRC5(addr, cmd, 0); break;
+    case RC6: IrSender.sendRC6(addr, cmd, 0); break;
+    case SAMSUNG: IrSender.sendSamsung(addr, cmd, 0); break;
+    default: IrSender.sendNEC(addr, cmd, 0); break;
+  }
+}
+
 void drawIRSend() {
   screen = SCR_IR_SEND;
   drawHeader("SENDING", ST77XX_GREEN);
@@ -219,13 +230,14 @@ void drawIRSend() {
   tft.setCursor(8, 40);
   tft.print("Remote: ");
   tft.setTextColor(ST77XX_WHITE);
-  tft.print(irCodes[menuSel].name);
+  int idx = menuSel < irCount ? menuSel : 0;
+  tft.print(irCodes[idx].name);
   tft.setTextColor(ST77XX_YELLOW);
   tft.setCursor(8, 60);
   tft.print("Sending IR signal...");
 
   for (int i = 0; i < 3; i++) {
-    IrSender.sendNEC(irCodes[menuSel].address, irCodes[menuSel].command, 0);
+    sendIR(irCodes[idx].address, irCodes[idx].command, irCodes[idx].protocol);
     delay(50);
   }
 
@@ -343,16 +355,25 @@ void saveCurrentIR() {
   strcpy(irCodes[idx].name, learnName);
   irCodes[idx].address = irResult.address;
   irCodes[idx].command = irResult.command;
-  irCodes[idx].protocol = irResult.decode_type;
+  irCodes[idx].protocol = (uint8_t)irResult.protocol;
   irCount++;
   saveIR();
 }
 
 void clearAllIR() {
+  for (int i = 0; i < irCount; i++) {
+    char key[16];
+    sprintf(key, "irname_%d", i);
+    prefs.remove(key);
+    sprintf(key, "iraddr_%d", i);
+    prefs.remove(key);
+    sprintf(key, "ircmd_%d", i);
+    prefs.remove(key);
+    sprintf(key, "irproto_%d", i);
+    prefs.remove(key);
+  }
   irCount = 0;
   prefs.putInt("ircount", 0);
-  prefs.end();
-  prefs.begin("pixiZ", false);
 }
 
 void startLearn() {
@@ -382,7 +403,7 @@ void loop() {
 
   if (learning && learnState == 0) {
     if (IrReceiver.decode()) {
-      irResult = IrReceiver.decodedData;
+      irResult = IrReceiver.decodedIRData;
       IrReceiver.resume();
       learnState = 1;
       drawIRLearn();
@@ -433,6 +454,7 @@ void loop() {
         break;
 
       case SCR_IR_SEND:
+        if (menu) { drawIRList(); }
         break;
 
       case SCR_BT:
@@ -463,5 +485,5 @@ void loop() {
     }
   }
 
-  delay(10);
+  yield();
 }
