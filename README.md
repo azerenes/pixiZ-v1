@@ -1,6 +1,6 @@
-# pixiZ Universal Remote
+# pixiZ v3 — Universal Remote
 
-ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğrenme/gönderme, Bluetooth HID klavye ve Wi-Fi kontrollerini tek cihazda birleştirir.
+ESP32 tabanlı, **PolyCast5** + **Flipper Zero** hibriti evrensel kumanda. IR öğrenme/gönderme, Bluetooth HID klavye, Wi-Fi tarama, ESP-NOW, şifre yöneticisi ve gelecek modüller (NFC, Sub-GHz, LoRa, SD kart) için hazır altyapı.
 
 ![pixiZ](https://img.shields.io/badge/status-active-brightgreen)
 ![ESP32](https://img.shields.io/badge/ESP32-DevKit%20V4-blue)
@@ -12,11 +12,15 @@ ESP32 tabanlı, **PolyCast5** benzeri çok fonksiyonlu evrensel kumanda. IR öğ
 
 | Mod | Özellik | Durum |
 |-----|---------|-------|
-| **IR Remote** | Kumandaları öğren ve sakla (NEC, Sony, RC5, RC6, Samsung) | ✅ Hazır |
-| **IR Remote** | Öğrenilen kodları gönder | ✅ Hazır |
-| **Bluetooth KB** | Bluetooth HID klavye olarak bağlan | ✅ Hazır |
-| **WiFi Kontrol** | HTTP/ESP-NOW ile cihaz kontrolü | 🔄 Planlandı |
-| **Ayarlar** | WiFi yapılandırma, cihaz bilgisi, IR temizleme, restart | ✅ Hazır |
+| **IR Remote** | Kumandaları öğren/sakla/gönder (NEC, Sony, RC5, RC6, Samsung) | ✅ Hazır |
+| **Bluetooth KB** | Bluetooth HID klavye (NimBLE) | ✅ Hazır |
+| **Wi-Fi Tools** | Ağ tarama, bilgi görüntüleme | ✅ Hazır |
+| **ESP-NOW** | ESP-NOW cihazlararası iletişim | 🔄 Hazır (devre dışı) |
+| **Passwords** | Çevrimdışı şifre yöneticisi | 🔄 Hazır (devre dışı) |
+| **PN532 NFC/RFID** | NFC kart okuma/yazma | 🔄 Planlandı |
+| **CC1101 Sub-GHz** | 433/868/915 MHz | 🔄 Planlandı |
+| **SX1278 LoRa** | Uzun mesafe iletişim | 🔄 Planlandı |
+| **SD Kart** | Veri depolama | 🔄 Planlandı |
 
 ---
 
@@ -93,24 +97,23 @@ GPIO 27 ── 1kΩ ──┐
 
 ---
 
-## Gerekli Kütüphaneler
+## Gerekli Kütüphaneler (v3)
 
 Arduino IDE → Sketch → Include Library → Manage Libraries:
 
-Arduino IDE → Sketch → Include Library → Manage Libraries:
-
-| Kütüphane | Arduino'daki Adı | Yazan |
-|-----------|-----------------|-------|
-| **IRremote** | `IRremote` | ArminJo |
-| **HijelHID_BLEKeyboard** | `HijelHID_BLEKeyboard` | HijelHub |
-| **NimBLE-Arduino** | `NimBLE-Arduino` | h2zero |
-| **Adafruit GFX** | `Adafruit GFX Library` | Adafruit |
-| **Adafruit ST7735** | `Adafruit ST7735 Library` | Adafruit |
+| Kütüphane | Arduino'daki Adı | Yazan | Zorunlu |
+|-----------|-----------------|-------|---------|
+| **IRremote** | `IRremote` | ArminJo | ✅ Evet |
+| **HijelHID_BLEKeyboard** | `HijelHID_BLEKeyboard` | HijelHub | ✅ Evet |
+| **NimBLE-Arduino** | `NimBLE-Arduino` | h2zero | ✅ Evet |
+| **Adafruit GFX** | `Adafruit GFX Library` | Adafruit | ✅ Evet |
+| **Adafruit ST7735** | `Adafruit ST7735 Library` | Adafruit | ✅ Evet |
 
 ESP32 board desteği için:
 - Arduino IDE: Dosya → Tercihler → "Ek Board Yöneticisi URL'leri"ne `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` ekle
 - Araçlar → Board → Board Manager → "ESP32" ara ve kur
 - Board seçimi: `ESP32 Dev Module`
+- **Partition Scheme**: `No OTA (Large APP)` (2MB flash için önerilir)
 
 ---
 
@@ -141,28 +144,38 @@ ESP32 board desteği için:
 
 ---
 
-## Proje Yapısı
+## Proje Yapısı (v3)
 
 ```
 pixiZ-v1/
 ├── pixiZ-v1/
-│   └── pixiZ-v1.ino      # Ana kod
+│   └── pixiZ-v1.ino      # Tek dosya — tüm modüller içinde
 ├── LICENSE                 # MIT Lisansı
 └── README.md               # Bu dosya
 ```
 
+Tüm modüller tek `.ino` dosyası içinde `#define ENABLE_xxx 0/1` ile yönetilir.
+Yeni donanım eklendiğinde flag 1 yapmak yeterli.
+
 ---
 
-## Yol Haritası
+## Yol Haritası (v3)
 
-- [x] IR öğrenme ve saklama
-- [x] IR kod gönderme
-- [x] Bluetooth HID klavye
-- [ ] Bluetooth üzerinden makro/tuş vuruşu gönderme
-- [ ] Wi-Fi / ESP-NOW cihaz kontrolü
-- [ ] IR kodlarını kategorilendirme
-- [ ] Daha fazla IR protokol desteği
+### Yazılım
+- [x] IR öğrenme/saklama/gönderme (multi-button remotes)
+- [x] Bluetooth HID klavye (NimBLE, Core 3.x)
+- [x] Wi-Fi ağ tarama
+- [x] Modüler yapı (`ENABLE_xxx` flagları)
+- [ ] Bluetooth üzerinden makro/tuş vuruşu
+- [ ] ESP-NOW peer-to-peer mesajlaşma
+- [ ] Çevrimdışı şifre yöneticisi
 - [ ] OTA güncelleme
+
+### Donanım (sırayla eklenecek)
+- [ ] **PN532** — NFC/RFID kart okuma/yazma (I2C)
+- [ ] **CC1101** — Sub-GHz 433/868/915 MHz (SPI)
+- [ ] **SX1278** — LoRa uzun mesafe (SPI)
+- [ ] **SD Kart modülü** — SPI (TFT ile CS paylaşımı)
 
 ---
 
