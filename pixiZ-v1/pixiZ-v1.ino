@@ -375,10 +375,21 @@ void drawLearn() {
       case SAMSUNG: tft.print("SAMSUNG"); break;
       default: tft.print(irRes.protocol);
     }
-    tft.setCursor(8, 86); tft.print("Addr:0x"); tft.print(irRes.addr, HEX);
-    tft.setCursor(8, 100); tft.print("Cmd: 0x"); tft.print(irRes.cmd, HEX);
+    tft.setCursor(8, 86); tft.print("Addr:0x"); tft.print(irRes.address, HEX);
+    tft.setCursor(8, 100); tft.print("Cmd: 0x"); tft.print(irRes.command, HEX);
   }
   ftr("OK=Learn/Save  MENU=Cancel");
+}
+
+void sendIR(uint16_t addr, uint16_t cmd, uint8_t proto) {
+  switch ((decode_type_t)proto) {
+    case NEC: IrSender.sendNEC(addr, cmd, 0); break;
+    case SONY: IrSender.sendSony(addr, cmd, 12); break;
+    case RC5: IrSender.sendRC5(addr, cmd, 0); break;
+    case RC6: IrSender.sendRC6(addr, cmd, 0); break;
+    case SAMSUNG: IrSender.sendSamsung(addr, cmd, 0); break;
+    default: IrSender.sendNEC(addr, cmd, 0); break;
+  }
 }
 
 void drawSend() {
@@ -389,9 +400,9 @@ void drawSend() {
   tft.setCursor(8, 56); tft.setTextColor(ST77XX_CYAN); tft.print("Button: ");
   tft.setTextColor(ST77XX_WHITE); tft.print(b->name);
   tft.setTextColor(ST77XX_YELLOW); tft.setCursor(8, 78); tft.print("Sending IR...");
-  for (int i = 0; i < 3; i++) { IrSender.sendNEC(b->addr, b->cmd, 0); delay(50); }
+  for (int i = 0; i < 3; i++) { sendIR(b->addr, b->cmd, b->proto); delay(50); }
   tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 96); tft.print("Done!");
-  delay(600);
+  ftr("MENU=Back");
 }
 
 void irAdd() {
@@ -437,9 +448,9 @@ void irSave() {
   int b = rmt[r].bc;
   if (b >= MAX_BTNS) return;
   strcpy(rmt[r].btns[b].name, tName);
-  rmt[r].btns[b].addr = irRes.addr;
-  rmt[r].btns[b].cmd = irRes.cmd;
-  rmt[r].btns[b].proto = irRes.protocol;
+  rmt[r].btns[b].addr = irRes.address;
+  rmt[r].btns[b].cmd = irRes.command;
+  rmt[r].btns[b].proto = (uint8_t)irRes.protocol;
   rmt[r].bc++; svIR(); sel3 = b; lrn = false;
   tft.fillRect(0, 50, 160, 30, ST77XX_BLACK);
   tft.setTextColor(ST77XX_GREEN); tft.setCursor(8, 64); tft.print("Saved!");
@@ -478,7 +489,8 @@ void actIR() {
     return;
   }
   if (pg == 4) {
-    pg=2; drawBtnList(); return;
+    if (menu()) { pg=2; drawBtnList(); }
+    return;
   }
 }
 
