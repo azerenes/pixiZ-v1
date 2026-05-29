@@ -7,8 +7,6 @@
 #define TFT_CS    5
 #define TFT_RST   16
 #define TFT_DC    17
-#define TFT_MOSI  23
-#define TFT_SCLK  18
 
 #define BTN_UP    32
 #define BTN_DOWN  33
@@ -56,7 +54,6 @@ int learnState = 0;
 int learnTargetRemote = -1;
 IRData irResult;
 char tmpName[MAX_BNAME];
-int tmpNameIdx = 0;
 
 unsigned long lastBtn = 0;
 const int DEBOUNCE = 200;
@@ -107,18 +104,17 @@ void splash() {
   tft.print("ESP32 DevKit V4");
 }
 
-void drawHeader(const char* title, uint16_t color) {
-  tft.fillScreen(ST77XX_BLACK);
+void hdr(const char* title, uint16_t color) {
   tft.fillRect(0, 0, 160, 20, color);
+  tft.drawFastHLine(0, 20, 160, color >> 1 & 0x7BEF);
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
   int tw = strlen(title) * 6;
   tft.setCursor((160 - tw) / 2, 5);
   tft.print(title);
-  tft.drawFastHLine(0, 20, 160, color >> 1 & 0x7BEF);
 }
 
-void footer(const char* text) {
+void ftr(const char* text) {
   tft.fillRect(0, 118, 160, 10, ST77XX_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_GREY);
@@ -126,94 +122,181 @@ void footer(const char* text) {
   tft.print(text);
 }
 
+// ─── MAIN MENU ──────────────────────────────────────
+
 void drawMain() {
   screen = SCR_MAIN;
-  drawHeader("pixiZ REMOTE", ST77XX_BLUE);
-  for (int i = 0; i < MAIN_COUNT; i++) {
-    int y = 28 + i * 30;
-    if (i == selRemote) {
-      tft.fillRoundRect(6, y, 148, 24, 4, ST77XX_CYAN);
-      tft.setTextColor(ST77XX_BLACK);
-    } else {
-      tft.drawRoundRect(6, y, 148, 24, 4, ST77XX_GREY);
-      tft.setTextColor(ST77XX_WHITE);
-    }
-    tft.setCursor(16, y + 7);
-    tft.print(mainItems[i]);
-  }
-  footer("UP/DOWN  OK=Sec  MENU=BT");
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("pixiZ REMOTE", ST77XX_BLUE);
+  for (int i = 0; i < MAIN_COUNT; i++)
+    drawMainItem(i, i == selRemote);
+  ftr("UP/DOWN  OK=Sec  MENU=BT");
 }
 
-void drawRemoteList() {
+void drawMainItem(int idx, bool sel) {
+  int y = 28 + idx * 30;
+  tft.fillRect(6, y, 148, 24, sel ? ST77XX_CYAN : ST77XX_BLACK);
+  if (sel) {
+    tft.drawRoundRect(6, y, 148, 24, 4, ST77XX_CYAN);
+    tft.setTextColor(ST77XX_BLACK);
+  } else {
+    tft.drawRoundRect(6, y, 148, 24, 4, ST77XX_GREY);
+    tft.setTextColor(ST77XX_WHITE);
+  }
+  tft.setCursor(16, y + 7);
+  tft.print(mainItems[idx]);
+}
+
+void mainUp() {
+  int o = selRemote;
+  selRemote = (selRemote - 1 + MAIN_COUNT) % MAIN_COUNT;
+  drawMainItem(o, false);
+  drawMainItem(selRemote, true);
+}
+
+void mainDown() {
+  int o = selRemote;
+  selRemote = (selRemote + 1) % MAIN_COUNT;
+  drawMainItem(o, false);
+  drawMainItem(selRemote, true);
+}
+
+void mainOk() {
+  switch (selRemote) {
+    case 0: selRemote = 0; selButton = 0; drawRmtList(); break;
+    case 1: drawBT(); break;
+    case 2: subSel = 0; drawSet(); break;
+  }
+}
+
+// ─── REMOTE LIST ────────────────────────────────────
+
+void drawRmtList() {
   screen = SCR_RMT_LIST;
-  drawHeader("REMOTES", ST77XX_GREEN);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("REMOTES", ST77XX_GREEN);
   if (remoteCount == 0) {
     tft.setTextColor(ST77XX_GREY);
     tft.setCursor(20, 50);
     tft.print("No remotes yet.");
     tft.setCursor(8, 66);
     tft.print("Press OK to add one");
-    footer("OK=Add  MENU=Back");
+    ftr("OK=Add  MENU=Back");
     return;
   }
-  int start = selRemote > 4 ? selRemote - 4 : 0;
-  int end = min(start + 5, remoteCount);
-  for (int i = start; i < end; i++) {
-    int y = 24 + (i - start) * 19;
-    if (i == selRemote) {
-      tft.fillRoundRect(2, y, 156, 17, 3, ST77XX_GREEN);
-      tft.setTextColor(ST77XX_BLACK);
-    } else {
-      tft.setTextColor(ST77XX_WHITE);
-    }
-    tft.setCursor(8, y + 4);
-    tft.print(remotes[i].name);
-    tft.setTextColor(ST77XX_GREY);
-    tft.setCursor(120, y + 4);
-    tft.printf("%d btn", remotes[i].btnCount);
-  }
-  footer("OK=Open  MENU=Back");
+  for (int i = 0; i < remoteCount && i < 5; i++)
+    drawRmtItem(i, i == selRemote);
+  ftr("OK=Open  MENU=Back");
 }
 
-void drawButtonList() {
+void drawRmtItem(int idx, bool sel) {
+  int y = 24 + idx * 19;
+  tft.fillRect(2, y, 156, 17, sel ? ST77XX_GREEN : ST77XX_BLACK);
+  if (sel) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_GREEN);
+  tft.setTextColor(sel ? ST77XX_BLACK : ST77XX_WHITE);
+  tft.setCursor(8, y + 4);
+  tft.print(remotes[idx].name);
+  tft.setTextColor(sel ? ST77XX_BLACK : ST77XX_GREY);
+  tft.setCursor(120, y + 4);
+  tft.printf("%d btn", remotes[idx].btnCount);
+}
+
+void rmtUp() {
+  if (remoteCount == 0) return;
+  int o = selRemote;
+  selRemote = (selRemote - 1 + remoteCount) % remoteCount;
+  drawRmtItem(o, false);
+  drawRmtItem(selRemote, true);
+}
+
+void rmtDown() {
+  if (remoteCount == 0) return;
+  int o = selRemote;
+  selRemote = (selRemote + 1) % remoteCount;
+  drawRmtItem(o, false);
+  drawRmtItem(selRemote, true);
+}
+
+void rmtOk() {
+  if (remoteCount == 0) { addNewRemote(); return; }
+  selButton = 0;
+  drawBtnList();
+}
+
+void rmtMenu() { selRemote = 0; drawMain(); }
+
+// ─── BUTTON LIST ────────────────────────────────────
+
+void drawBtnList() {
   screen = SCR_BTN_LIST;
-  drawHeader(remotes[selRemote].name, ST77XX_GREEN);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr(remotes[selRemote].name, ST77XX_GREEN);
   int cnt = remotes[selRemote].btnCount;
-  int total = cnt + (cnt < MAX_BTNS ? 1 : 0);
   if (cnt == 0) {
     tft.setTextColor(ST77XX_GREY);
     tft.setCursor(12, 50);
     tft.print("No buttons yet.");
     tft.setCursor(8, 66);
     tft.print("Press OK to learn");
-    footer("OK=Learn  MENU=Back");
+    ftr("OK=Learn  MENU=Back");
     return;
   }
-  int start = selButton > 4 ? selButton - 4 : 0;
-  int end = min(start + 5, total);
-  for (int i = start; i < end; i++) {
-    int y = 24 + (i - start) * 19;
-    if (i == selButton) {
-      tft.fillRoundRect(2, y, 156, 17, 3, ST77XX_CYAN);
-      tft.setTextColor(ST77XX_BLACK);
-    } else {
-      tft.setTextColor(ST77XX_WHITE);
-    }
-    if (i < cnt) {
-      tft.setCursor(8, y + 4);
-      tft.print(remotes[selRemote].buttons[i].name);
-    } else {
-      tft.setTextColor(ST77XX_GREEN);
-      tft.setCursor(8, y + 4);
-      tft.print("+ Add Button");
-    }
-  }
-  footer("OK=Send/Add  MENU=Back");
+  int total = cnt + (cnt < MAX_BTNS ? 1 : 0);
+  for (int i = 0; i < total && i < 5; i++)
+    drawBtnItem(i, i == selButton);
+  ftr("OK=Send/Add  MENU=Back");
 }
+
+void drawBtnItem(int idx, bool sel) {
+  int cnt = remotes[selRemote].btnCount;
+  int y = 24 + idx * 19;
+  tft.fillRect(2, y, 156, 17, sel ? ST77XX_CYAN : ST77XX_BLACK);
+  if (sel) tft.drawRoundRect(2, y, 156, 17, 3, ST77XX_CYAN);
+  tft.setTextColor(sel ? ST77XX_BLACK : ST77XX_WHITE);
+  if (idx < cnt) {
+    tft.setCursor(8, y + 4);
+    tft.print(remotes[selRemote].buttons[idx].name);
+  } else {
+    tft.setTextColor(sel ? ST77XX_BLACK : ST77XX_GREEN);
+    tft.setCursor(8, y + 4);
+    tft.print("+ Add Button");
+  }
+}
+
+void btnUp() {
+  int cnt = remotes[selRemote].btnCount;
+  int total = cnt + (cnt < MAX_BTNS ? 1 : 0);
+  if (total == 0) return;
+  int o = selButton;
+  selButton = (selButton - 1 + total) % total;
+  drawBtnItem(o, false);
+  drawBtnItem(selButton, true);
+}
+
+void btnDown() {
+  int cnt = remotes[selRemote].btnCount;
+  int total = cnt + (cnt < MAX_BTNS ? 1 : 0);
+  if (total == 0) return;
+  int o = selButton;
+  selButton = (selButton + 1) % total;
+  drawBtnItem(o, false);
+  drawBtnItem(selButton, true);
+}
+
+void btnOk() {
+  int cnt = remotes[selRemote].btnCount;
+  if (cnt == 0 || selButton >= cnt) { startLearn(selRemote); }
+  else { drawSend(); }
+}
+
+void btnMenu() { drawRmtList(); }
+
+// ─── LEARN ──────────────────────────────────────────
 
 void drawLearn() {
   screen = SCR_LEARN;
-  drawHeader("LEARN IR", ST77XX_RED);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("LEARN IR", ST77XX_RED);
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(8, 30);
   tft.print("Remote: ");
@@ -228,7 +311,7 @@ void drawLearn() {
     tft.print("button on remote");
     tft.setTextColor(ST77XX_GREY);
     tft.setCursor(8, 90);
-    tft.print("Button name:");
+    tft.print("Button: ");
     tft.setTextColor(ST77XX_WHITE);
     tft.setCursor(8, 104);
     tft.print(tmpName);
@@ -258,12 +341,27 @@ void drawLearn() {
     tft.print("Cmd: 0x");
     tft.print(irResult.command, HEX);
   }
-  footer("OK=Learn/Save  MENU=Cancel");
+  ftr("OK=Learn/Save  MENU=Cancel");
 }
+
+void learnOk() {
+  if (learnState == 0) { drawLearn(); }
+  else { saveLearnedBtn(); }
+}
+
+void learnMenu() {
+  learning = false; learnState = 0;
+  if (remotes[learnTargetRemote].btnCount > 0) drawBtnList();
+  else drawRmtList();
+}
+
+// ─── SEND ───────────────────────────────────────────
 
 void drawSend() {
   screen = SCR_SEND;
-  drawHeader("SENDING", ST77XX_GREEN);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("SENDING", ST77XX_GREEN);
+  IRButton* b = &remotes[selRemote].buttons[selButton];
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(8, 40);
   tft.print("Remote: ");
@@ -273,11 +371,10 @@ void drawSend() {
   tft.setTextColor(ST77XX_CYAN);
   tft.print("Button: ");
   tft.setTextColor(ST77XX_WHITE);
-  tft.print(remotes[selRemote].buttons[selButton].name);
+  tft.print(b->name);
   tft.setTextColor(ST77XX_YELLOW);
   tft.setCursor(8, 78);
   tft.print("Sending IR...");
-  IRButton* b = &remotes[selRemote].buttons[selButton];
   for (int i = 0; i < 3; i++) {
     IrSender.sendNEC(b->address, b->command, 0);
     delay(50);
@@ -286,22 +383,20 @@ void drawSend() {
   tft.setCursor(8, 96);
   tft.print("Done!");
   delay(600);
-  drawButtonList();
+  drawBtnList();
 }
+
+// ─── BT ─────────────────────────────────────────────
 
 void drawBT() {
   screen = SCR_BT;
-  drawHeader("BLUETOOTH KB", ST77XX_MAGENTA);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("BLUETOOTH KB", ST77XX_MAGENTA);
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(8, 32);
   tft.print("Status: ");
-  if (bleKeyboard.isConnected()) {
-    tft.setTextColor(ST77XX_GREEN);
-    tft.print("CONNECTED");
-  } else {
-    tft.setTextColor(ST77XX_YELLOW);
-    tft.print("WAITING...");
-  }
+  tft.setTextColor(bleKeyboard.isConnected() ? ST77XX_GREEN : ST77XX_YELLOW);
+  tft.print(bleKeyboard.isConnected() ? "CONNECTED" : "WAITING...");
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(8, 52);
   tft.print("Device: pixiZ Remote");
@@ -312,29 +407,68 @@ void drawBT() {
   tft.print("settings on your");
   tft.setCursor(8, 100);
   tft.print("computer/phone.");
-  footer("MENU=Back");
+  ftr("MENU=Back");
 }
 
-void drawSettings() {
+void btMenu() { drawMain(); }
+
+// ─── SETTINGS ───────────────────────────────────────
+
+void drawSet() {
   screen = SCR_SETTINGS;
-  drawHeader("SETTINGS", ST77XX_CYAN);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("SETTINGS", ST77XX_CYAN);
   const char* items[] = {"WiFi Setup", "About", "Clear All", "Restart"};
-  for (int i = 0; i < 4; i++) {
-    int y = 28 + i * 22;
-    if (i == subSel) {
-      tft.fillRoundRect(4, y, 152, 18, 3, ST77XX_CYAN);
-      tft.setTextColor(ST77XX_BLACK);
-    } else {
-      tft.setTextColor(ST77XX_WHITE);
-    }
-    tft.setCursor(12, y + 4);
-    tft.print(items[i]);
-  }
-  footer("UP/DOWN  OK=Sec  MENU=Back");
+  for (int i = 0; i < 4; i++) drawSetItem(i, i == subSel);
+  ftr("UP/DOWN  OK=Sec  MENU=Back");
 }
+
+void drawSetItem(int idx, bool sel) {
+  const char* items[] = {"WiFi Setup", "About", "Clear All", "Restart"};
+  int y = 28 + idx * 22;
+  tft.fillRect(4, y, 152, 18, sel ? ST77XX_CYAN : ST77XX_BLACK);
+  if (sel) tft.drawRoundRect(4, y, 152, 18, 3, ST77XX_CYAN);
+  tft.setTextColor(sel ? ST77XX_BLACK : ST77XX_WHITE);
+  tft.setCursor(12, y + 4);
+  tft.print(items[idx]);
+}
+
+void setUp() {
+  int o = subSel;
+  subSel = (subSel - 1 + 4) % 4;
+  drawSetItem(o, false);
+  drawSetItem(subSel, true);
+}
+
+void setDown() {
+  int o = subSel;
+  subSel = (subSel + 1) % 4;
+  drawSetItem(o, false);
+  drawSetItem(subSel, true);
+}
+
+void setOk() {
+  switch (subSel) {
+    case 1: drawAbout(); break;
+    case 2:
+      clearAll();
+      tft.setTextColor(ST77XX_GREEN);
+      tft.setCursor(8, 80);
+      tft.print("All data cleared!");
+      delay(1000);
+      drawSet();
+      break;
+    case 3: ESP.restart(); break;
+  }
+}
+
+void setMenu() { drawMain(); }
+
+// ─── ABOUT ──────────────────────────────────────────
 
 void drawAbout() {
-  drawHeader("ABOUT pixiZ", ST77XX_BLUE);
+  tft.fillScreen(ST77XX_BLACK);
+  hdr("ABOUT pixiZ", ST77XX_BLUE);
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(8, 30);
   tft.print("pixiZ Universal Remote");
@@ -348,8 +482,10 @@ void drawAbout() {
   tft.print("IR + Bluetooth + WiFi");
   tft.setCursor(8, 98);
   tft.print("github.com/azerenes/pixiZ-v1");
-  footer("MENU=Back");
+  ftr("MENU=Back");
 }
+
+// ─── STORAGE ────────────────────────────────────────
 
 void loadAll() {
   remoteCount = prefs.getInt("rmcnt", 0);
@@ -422,6 +558,19 @@ String genRemoteName() {
   }
 }
 
+void addNewRemote() {
+  if (remoteCount >= MAX_REMOTES) return;
+  String name = genRemoteName();
+  int r = remoteCount;
+  strcpy(remotes[r].name, name.c_str());
+  remotes[r].btnCount = 0;
+  remoteCount++;
+  saveAll();
+  selRemote = r;
+  selButton = 0;
+  startLearn(r);
+}
+
 void startLearn(int rmtIdx) {
   learnTargetRemote = rmtIdx;
   learnState = 0;
@@ -437,19 +586,6 @@ void startLearn(int rmtIdx) {
     if (!found) { strcpy(tmpName, buf); break; }
   }
   drawLearn();
-}
-
-void addNewRemote() {
-  if (remoteCount >= MAX_REMOTES) return;
-  String name = genRemoteName();
-  int r = remoteCount;
-  strcpy(remotes[r].name, name.c_str());
-  remotes[r].btnCount = 0;
-  remoteCount++;
-  saveAll();
-  selRemote = r;
-  selButton = 0;
-  startLearn(r);
 }
 
 void saveLearnedBtn() {
@@ -470,8 +606,10 @@ void saveLearnedBtn() {
   tft.setCursor(8, 64);
   tft.print("Saved!");
   delay(600);
-  drawButtonList();
+  drawBtnList();
 }
+
+// ─── LOOP ───────────────────────────────────────────
 
 void loop() {
   unsigned long now = millis();
@@ -494,80 +632,36 @@ void loop() {
     lastBtn = now;
     switch (screen) {
       case SCR_MAIN:
-        if (up) { selRemote = (selRemote - 1 + MAIN_COUNT) % MAIN_COUNT; drawMain(); }
-        else if (down) { selRemote = (selRemote + 1) % MAIN_COUNT; drawMain(); }
-        else if (ok) {
-          switch (selRemote) {
-            case 0: selRemote = 0; selButton = 0; drawRemoteList(); break;
-            case 1: drawBT(); break;
-            case 2: subSel = 0; drawSettings(); break;
-          }
-        }
-        else if (menu) { drawBT(); }
+        if (up) mainUp();
+        else if (down) mainDown();
+        else if (ok) mainOk();
+        else if (menu) drawBT();
         break;
-
       case SCR_RMT_LIST:
-        if (remoteCount == 0) {
-          if (ok) addNewRemote();
-          else if (menu) { selRemote = 0; drawMain(); }
-        } else {
-          if (up) { selRemote = (selRemote - 1 + remoteCount) % remoteCount; drawRemoteList(); }
-          else if (down) { selRemote = (selRemote + 1) % remoteCount; drawRemoteList(); }
-          else if (ok) { selButton = 0; drawButtonList(); }
-          else if (menu) { selRemote = 0; drawMain(); }
-        }
+        if (up) rmtUp();
+        else if (down) rmtDown();
+        else if (ok) rmtOk();
+        else if (menu) rmtMenu();
         break;
-
-      case SCR_BTN_LIST: {
-        int cnt = remotes[selRemote].btnCount;
-        int total = cnt + (cnt < MAX_BTNS ? 1 : 0);
-        if (ok) {
-          if (cnt == 0 || selButton >= cnt) { startLearn(selRemote); }
-          else { drawSend(); }
-        } else if (up && total > 0) { selButton = (selButton - 1 + total) % total; drawButtonList(); }
-        else if (down && total > 0) { selButton = (selButton + 1) % total; drawButtonList(); }
-        else if (menu) { drawRemoteList(); }
+      case SCR_BTN_LIST:
+        if (up) btnUp();
+        else if (down) btnDown();
+        else if (ok) btnOk();
+        else if (menu) btnMenu();
         break;
-      }
-
       case SCR_LEARN:
-        if (ok) {
-          if (learnState == 0) { drawLearn(); }
-          else { saveLearnedBtn(); }
-        } else if (menu) {
-          learning = false; learnState = 0;
-          if (remotes[learnTargetRemote].btnCount > 0) drawButtonList();
-          else drawRemoteList();
-        }
+        if (ok) learnOk();
+        else if (menu) learnMenu();
         break;
-
-      case SCR_SEND:
-        break;
-
       case SCR_BT:
-        if (menu) { drawMain(); }
+        if (menu) btMenu();
         break;
-
       case SCR_SETTINGS:
-        if (up) { subSel = (subSel - 1 + 4) % 4; drawSettings(); }
-        else if (down) { subSel = (subSel + 1) % 4; drawSettings(); }
-        else if (ok) {
-          switch (subSel) {
-            case 1: drawAbout(); break;
-            case 2:
-              clearAll();
-              tft.setTextColor(ST77XX_GREEN);
-              tft.setCursor(8, 80);
-              tft.print("All data cleared!");
-              delay(1000);
-              drawSettings();
-              break;
-            case 3: ESP.restart(); break;
-          }
-        }
-        else if (menu) { drawMain(); }
+        if (up) setUp();
+        else if (down) setDown();
+        else if (ok) setOk();
+        else if (menu) setMenu();
         break;
     }
   }
-  delay(5);
 }
